@@ -1213,14 +1213,18 @@
 	    </plugin>
 	  </sensor>
 	</link>
-
-    <joint name="hokuyo_joint" type="revolute">
-      <child>hokuyo::link</child>
-      <parent>typhoon_h480::base_link</parent>
-      <axis>
-	<xyz>-0.1 0 1.1</xyz>
-      </axis>
-    </joint>
+	
+	<include>
+     		 <uri>model://hokuyo</uri>
+     		 <pose>0.03 0 0.07 0 0 0</pose>
+   	</include>
+    	<joint name="hokuyo_joint" type="revolute">
+     		<child>hokuyo::link</child>
+      		<parent>typhoon_h480::base_link</parent>
+     		<axis>
+			<xyz>-0.1 0 1.1</xyz>
+      		</axis>
+    	</joint>
 
     <plugin name='rosbag' filename='libgazebo_multirotor_base_plugin.so'>
       <robotNamespace></robotNamespace>
