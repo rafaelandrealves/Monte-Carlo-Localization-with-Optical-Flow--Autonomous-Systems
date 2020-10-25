@@ -1149,14 +1149,14 @@
       <child>gps::link</child>
       <parent>base_link</parent>
     </joint>
-	
+	<!--
 	<include>
      		 <uri>model://hokuyo</uri>
      		 <pose>0.03 0 0.07 0 0 0</pose>
-   	</include>
+   	</include>-->
 	<!--add lidar-->
 	<link name="hokuyo_link">
-	  <pose>0 0 0 0 0 0</pose>
+	  <pose>0.03 0 0.07 0 0 </pose>
 	  <collision name="collision">
 	    <pose>0 0 0.3 0 0 0</pose>
 	    <geometry>
