@@ -1,0 +1,6 @@
+<launch>
+
+
+    <node pkg="Monte_Carlo" type="mcl.py" name="Monte_Carlo" output="screen" />
+
+</launch>    
