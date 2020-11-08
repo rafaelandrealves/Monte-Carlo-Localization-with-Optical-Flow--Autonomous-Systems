@@ -6,7 +6,8 @@ import rospy
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid, MapMetaData, Odometry
 from geometry_msgs.msg import Twist, PoseStamped, Point
-
+from tf.transformations  import euler_from_quaternion, quaternion_from_euler
+import tf.transformations as tr
 
 #def unamed():
 #    return
@@ -67,8 +68,95 @@ class Particle_filter(object):
 
 def map_callback(msg):
     print (msg.info)
-def odom_callback(msg):
-    print (msg.pose)      
+
+
+def get_odometry(self,msg):
+    #print (msg.pose)
+
+    # Pose
+
+    self.robot_odom.pose.pose.position.x
+    self.robot_odom.pose.pose.position.y
+    self.robot_odom.pose.pose.position.z 
+
+    # Orientation
+
+    self.robot_odom.pose.pose.orientation.x
+    self.robot_odom.pose.pose.orientation.y
+    self.robot_odom.pose.pose.orientation.z
+    self.robot_odom.pose.pose.orientation.w
+    
+
+def odom_processing(self,robot_odom):
+    #Save robot Odometry
+
+
+    # Determine the difference between new and old values
+    self.last_robot_odom = self.robot_odom
+    self.robot_odom = robot_odom
+
+    if self.last_robot_odom:
+
+        p_map_currbaselink = np.array([self.robot_odom.pose.pose.position.x,
+                                        self.robot_odom.pose.pose.position.y,
+                                        self.robot_odom.pose.pose.position.z])
+
+        p_map_lastbaselink = np.array([self.last_robot_odom.pose.pose.position.x,
+                                        self.last_robot_odom.pose.pose.position.y,
+                                        self.last_robot_odom.pose.pose.position.z])
+
+        q_map_lastbaselink = np.array([self.last_robot_odom.pose.pose.orientation.x,
+                                        self.last_robot_odom.pose.pose.orientation.y,
+                                        self.last_robot_odom.pose.pose.orientation.z,
+                                        self.last_robot_odom.pose.pose.orientation.w])
+
+        q_map_currbaselink = np.array([self.robot_odom.pose.pose.orientation.x,
+                                        self.robot_odom.pose.pose.orientation.y,
+                                        self.robot_odom.pose.pose.orientation.z,
+                                        self.robot_odom.pose.pose.orientation.w])
+
+        # Save quaternion units, with axis of rotation
+        # Does the rotation matrix
+        
+        q_map_lastbaselink_euler = euler_from_quaternion(q_map_lastbaselink)
+        q_map_currbaselink_euler = euler_from_quaternion(q_map_currbaselink)
+        
+        # Does the difference in yaw
+
+        yaw_diff = q_map_currbaselink_euler[2] - q_map_lastbaselink_euler[2]
+
+
+        self.dyaw += yaw_diff
+        self.dx += p_lastbaselink_currbaselink[0]
+        self.dy += p_lastbaselink_currbaselink[1]
+def predict_next_odometry(self, particle):
+
+    delta_x = random.gauss(0, self.dynamics_translation_noise_std_dev)
+    delta_y = random.gauss(0, self.dynamics_translation_noise_std_dev)
+    ntheta = random.gauss(0, self.dynamics_orientation_noise_std_dev)
+
+    distance = sqrt(self.delta_x**2 + self.delta_y**2)
+
+
+    particle.x += distance * cos(particle.theta) + nx
+    particle.y += distance * sin(particle.theta) + ny
+    particle.theta += self.dyaw + ntheta
+   
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def scan_callback(msg):
     print (msg.ranges) 
 
@@ -83,7 +171,15 @@ if __name__ == '__main__':
     rospy.init_node('Particle_Filter')
     #rospy.Subscriber('/mavros/local_position/odom', Odometry, odom_callback)
     #rospy.Subscriber('/base_scan', LaserScan, scan_callback)
-    rospy.Subscriber('/map', OccupancyGrid, map_callback)
+    #rospy.Subscriber('/map', OccupancyGrid, map_callback)
+    
+    
+    # Depois meter no init
+    """ dynamics_translation_noise_std_dev   = 0.45
+    dynamics_orientation_noise_std_dev   = 0.03
+    beam_range_measurement_noise_std_dev = 0.3
+     """
+    
     rospy.spin()
 
 
