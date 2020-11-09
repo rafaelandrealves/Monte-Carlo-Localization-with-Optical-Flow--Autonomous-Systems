@@ -81,28 +81,47 @@ class Particle_filter(object):
             idxf = mt.floor(idx)
             idy = i-idxf*_pbmat.shape[1]
             _pbmat[idxf,idy] = _pbmat[idxf,idy]*newmat[idxf,idy]
+        return _pbmat
+            
+    def et_eff_part(self, _w_vect): #criado
+        sum_weight = 0
+        for m in range(self.M):
+            sum_weight = sum_weight + _w_vect[m]**2
+        n_eff = 1/(sum_weight)
+        return n_eff
+    
+    def normalize_weights(self, _n_w): #criado
+        total_w = sum(_n_w)
+        for m in range(self.M):
+            _n_w[m] = _n_w[m]/total_w
+        return _n_w
             
     def Resample_particles(self):
         newPF = []
         finPF = [] #provisório
+        new_weight = np.zeros(self.M) #alterado
         for m in range(self.M):
-            new_pos = predict_next_odometry(m)
-            new_weight = weight_change(m)
-            newPF.append(Particle(m, new_pos, new_weight))
-        for m in range(self.M):
-            lin_pb = np.random.uniform(0,1,(self.x,self.y))
-            self.particle_update_weight(lin_pb, newPF)
-            mx = np.argmax(lin_pb)
-            idx = mx/self.y
-            idxf = int(mt.floor(idx))
-            idy = mx-idxf*self.y
-            while (self.map[idx,idy] != 0):
-                lin_pb[idx,idy] = 0
+            new_pos = self.predict_next_odometry(m) #alterado
+            new_weight[m] = self.weight_change(m) #alterado
+            newPF.append(Particle(m, new_pos, new_weight[m])) #alterado !!!Falta theta!!!
+        new_weight = self.normalize_weights(new_weight)
+        eff_particles = self.det_eff_part(new_weight) #alterado
+        if eff_particles < self.M/2:
+            for m in range(self.M):
+                lin_pb = np.random.uniform(0,1,(self.x,self.y))
+                lin_pb = self.particle_update_weight(lin_pb, newPF)
                 mx = np.argmax(lin_pb)
                 idx = mx/self.y
                 idxf = int(mt.floor(idx))
                 idy = mx-idxf*self.y
-            finPF.append(Particle(m,[idxf,idy],1))    
+                while (self.map[idx,idy] != 0):
+                    lin_pb[idx,idy] = 0
+                    mx = np.argmax(lin_pb)
+                    idx = mx/self.y
+                    idxf = int(mt.floor(idx))
+                    idy = mx-idxf*self.y
+                finPF.append(Particle(m,[idxf,idy],1))
+            self.particles = finPF
             
     def angle_vect_make(self, _max_angle, _min_angle, _angle_inc):
         n_values = int((_max_angle-_min_angle)/_angle_inc)
@@ -136,13 +155,14 @@ class Particle_filter(object):
         yw = yi+yy
         if self.map[xw,yw] != 0:
             _wt+=1
+            return _wt
         
     def weight_change(self, _m):
         wt = 1
         for i in range(self.angle_readings):
             if self.ranges_in_grid[0,i] != -1:
-                self.compare_dist(_m,i,wt)
-        wt = wt/1023
+                wt = self.compare_dist(_m,i,wt)
+        wt = wt/(self.range_readings+1) #alterado
         return wt    
         
 
@@ -221,6 +241,8 @@ class Particle_filter(object):
         self.particle[m].x += distance * cos(self.particle[m].theta) + delta_x
         self.particle[m].y += distance * sin(self.particle[m].theta) + delta_y
         self.particle[m].theta += self.dyaw + ntheta
+        
+        #!!!FALTA RETURN!!!
     
     def scan_analysis(self, msg):
         max_angle_sensor = msg.angle_max
