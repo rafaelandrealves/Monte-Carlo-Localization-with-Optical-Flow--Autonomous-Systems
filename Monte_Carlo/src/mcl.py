@@ -101,9 +101,9 @@ class Particle_filter(object):
         finPF = [] #provisório
         new_weight = np.zeros(self.M) #alterado
         for m in range(self.M):
-            new_pos = self.predict_next_odometry(m) #alterado
+            [new_pos,new_theta] = self.predict_next_odometry(m) #alterado
             new_weight[m] = self.weight_change(m) #alterado
-            newPF.append(Particle(m, new_pos, new_weight[m])) #alterado !!!Falta theta!!!
+            newPF.append(Particle(m, new_pos, new_weight[m], _theta = new_theta)) #alterado
         new_weight = self.normalize_weights(new_weight)
         eff_particles = self.det_eff_part(new_weight) #alterado
         if eff_particles < self.M/2:
@@ -242,7 +242,7 @@ class Particle_filter(object):
         self.particle[m].y += distance * sin(self.particle[m].theta) + delta_y
         self.particle[m].theta += self.dyaw + ntheta
         
-        #!!!FALTA RETURN!!!
+        return [[self.particle[m].x,self.particle[m].y],self.particle[m].theta]
     
     def scan_analysis(self, msg):
         max_angle_sensor = msg.angle_max
