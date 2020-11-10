@@ -153,6 +153,16 @@ class Particle_filter(object):
             else:
                 self.ranges_in_grid[0,i] = -1
                 self.ranges_in_grid[1,i] = -1
+    
+    def subsample(self, _msg): #ESTA
+        subsample_range = []
+        subsample_angle = []
+        j = 0
+        for i in range(self.angle_readings):
+            if self.ranges[i] < self.max_dist and self.ranges[i] > self.min_dist:
+                subsample_angle[j] = self.angle_vector[i]
+                subsample_range[j] = self.ranges[i]
+        return subsample_range, subsample_angle
 
     def compare_dist(self, _m, _i, _wt):
         xx = int(mt.floor(self.ranges_in_grid[0,_i]))
