@@ -112,7 +112,8 @@ class Particle_filter(object):
             newPF.append(Particle(m, new_pos, new_weight[m], _theta = new_theta)) #alterado
         new_weight = self.normalize_weights(new_weight)
         eff_particles = self.det_eff_part(new_weight) #alterado
-        #print('EFfective particle:',eff_particles)
+        print(new_weight)
+        print('EFfective particle:',eff_particles)
         if eff_particles < self.M/2:
             for m in range(self.M):
                 lin_pb = np.random.uniform(0,1,(self.x,self.y))
@@ -156,26 +157,24 @@ class Particle_filter(object):
     def compare_dist(self, _m, _i, _wt):
         xx = int(mt.floor(self.ranges_in_grid[0,_i]))
         yy = int(mt.floor(self.ranges_in_grid[1,_i]))
-        xi = self.particles[_m].pos[0]
-        yi = self.particles[_m].pos[1]
+        xi = int(self.particles[_m].pos[0])
+        yi = int(self.particles[_m].pos[1])
         xw = xi+xx
         yw = yi+yy
         wa = 0
-        # for i in range(-5,5):
-        #     wa = wa + self.map[xw+i,yw+i]
-        print(xx)
-        print(yy)
-        print(xi)
-        print(yi)
-        if self.map[xw,yw] > 0:
-            _wt+=1
-            return _wt
+        for i in range(-5,5):
+            if(xw+i > 0 and xw+i < self.x and yw+i > 0 and yw+i < self.y):
+                wa = wa + self.map[xw+i,yw+i]
+        if wa > 0:
+            return 1
+        else:
+            return 0
 
     def weight_change(self, _m):
         wt = 1
         for i in range(self.angle_readings):
             if self.ranges_in_grid[0,i] != -1:
-                wt = self.compare_dist(_m,i,wt)
+                wt = wt + self.compare_dist(_m,i,wt)
         wt = wt/float(self.angle_readings+1) #alterado
         #print(wt)
         return wt
@@ -246,8 +245,8 @@ class Particle_filter(object):
         max_angle_sensor = msg.angle_max
         min_angle_sensor = msg.angle_min
         angle_inc_sensor = msg.angle_increment
-        self.max_dist = msg.range_max #AQUI
-        self.min_dist = msg.range_min #AQUI
+        self.max_dist = msg.range_max
+        self.min_dist = msg.range_min
         self.angle_vect_make(max_angle_sensor, min_angle_sensor, angle_inc_sensor)
         self.ranges = msg.ranges
 
@@ -312,7 +311,7 @@ class MCL(object):
 
 if __name__ == '__main__':
 
-    numero_particulas = 100
+    numero_particulas = 1000
 
     Monte_carlo = MCL(numero_particulas)
 
