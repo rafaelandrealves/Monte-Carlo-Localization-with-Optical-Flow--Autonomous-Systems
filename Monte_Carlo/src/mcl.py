@@ -8,6 +8,9 @@ from nav_msgs.msg import OccupancyGrid, MapMetaData, Odometry
 from geometry_msgs.msg import Twist, PoseStamped, Point
 from tf.transformations  import euler_from_quaternion, quaternion_from_euler
 import tf.transformations as tr
+import random
+
+
 
 class Particle(object):
     def __init__(self, _id, _pos, _weight, _theta=0):
@@ -49,7 +52,7 @@ class Particle_filter(object):
 
         # Init ranges of ogm
 
-        self.ranges_in_grid = None
+        self.ranges_in_grid = []
         self.ranges = []
         # variance of values in point coordinates
 
@@ -59,6 +62,8 @@ class Particle_filter(object):
     
     def Particle_init(self):
         for m in range(self.M):
+            while self.x == 0:
+                rospy.sleep(1)
             lin_pb = np.random.uniform(0,1,(self.x,self.y))
             mx = np.argmax(lin_pb)
             idx = mx/self.y
@@ -83,7 +88,7 @@ class Particle_filter(object):
             _pbmat[idxf,idy] = _pbmat[idxf,idy]*newmat[idxf,idy]
         return _pbmat
             
-    def et_eff_part(self, _w_vect): #criado
+    def det_eff_part(self, _w_vect): #criado
         sum_weight = 0
         for m in range(self.M):
             sum_weight = sum_weight + _w_vect[m]**2
@@ -100,12 +105,14 @@ class Particle_filter(object):
         newPF = []
         finPF = [] #provisório
         new_weight = np.zeros(self.M) #alterado
+        self.m_to_grid()
         for m in range(self.M):
             [new_pos,new_theta] = self.predict_next_odometry(m) #alterado
             new_weight[m] = self.weight_change(m) #alterado
             newPF.append(Particle(m, new_pos, new_weight[m], _theta = new_theta)) #alterado
         new_weight = self.normalize_weights(new_weight)
         eff_particles = self.det_eff_part(new_weight) #alterado
+        print('EFfective particle:',eff_particles)
         if eff_particles < self.M/2:
             for m in range(self.M):
                 lin_pb = np.random.uniform(0,1,(self.x,self.y))
@@ -125,7 +132,7 @@ class Particle_filter(object):
             
     def angle_vect_make(self, _max_angle, _min_angle, _angle_inc):
         n_values = int((_max_angle-_min_angle)/_angle_inc)
-        self.angle_vector = np.zeros((1, n_values))
+        self.angle_vector = np.zeros((n_values,1))
         self.angle_readings = n_values
         for i in range(n_values):
             self.angle_vector[i] = _min_angle+_angle_inc*i
@@ -134,7 +141,7 @@ class Particle_filter(object):
         self.map = np.zeros((self.x,self.y))
         for i in range(self.x):
             for j in range(self.y):
-                self.map[i,j] = _data(i*self.y+j)
+                self.map[i,j] = _data[i*self.y+j]
     
     def m_to_grid(self):
         self.ranges_in_grid = np.zeros((2,self.angle_readings))
@@ -162,25 +169,8 @@ class Particle_filter(object):
         for i in range(self.angle_readings):
             if self.ranges_in_grid[0,i] != -1:
                 wt = self.compare_dist(_m,i,wt)
-        wt = wt/(self.range_readings+1) #alterado
-        return wt    
-        
-
-    def get_odometry(self,msg):
-
-        # Pose
-
-        self.robot_odom.pose.pose.position.x
-        self.robot_odom.pose.pose.position.y
-        self.robot_odom.pose.pose.position.z 
-
-        # Orientation
-
-        self.robot_odom.pose.pose.orientation.x
-        self.robot_odom.pose.pose.orientation.y
-        self.robot_odom.pose.pose.orientation.z
-        self.robot_odom.pose.pose.orientation.w
-        
+        wt = wt/float(self.angle_readings+1) #alterado
+        return wt            
 
     def odom_processing(self,msg):
         #Save robot Odometry
@@ -188,7 +178,7 @@ class Particle_filter(object):
 
         # Determine the difference between new and old values
         self.last_robot_odom = self.robot_odom
-        self.get_odometry(msg)#robot_odom
+        self.robot_odom = msg
 
         if self.last_robot_odom:
 
@@ -235,14 +225,14 @@ class Particle_filter(object):
         delta_y = random.gauss(0, self.dynamics_translation_noise_std_dev)
         ntheta = random.gauss(0, self.dynamics_orientation_noise_std_dev)
 
-        distance = sqrt(self.dx**2 + self.dy**2)
+        distance = mt.sqrt(self.dx**2 + self.dy**2)
 
 
-        self.particle[m].x += distance * cos(self.particle[m].theta) + delta_x
-        self.particle[m].y += distance * sin(self.particle[m].theta) + delta_y
-        self.particle[m].theta += self.dyaw + ntheta
-        
-        return [[self.particle[m].x,self.particle[m].y],self.particle[m].theta]
+        self.particles[m].pos[0] += distance * mt.cos(self.particles[m].theta) + delta_x
+        self.particles[m].pos[1] += distance * mt.sin(self.particles[m].theta) + delta_y
+        self.particles[m].theta += self.dyaw + ntheta
+        #print('The particle',m,'is in (',self.particles[m].pos[0],',',self.particles[m].pos[1],')')
+        return [[self.particles[m].pos[0],self.particles[m].pos[1]],self.particles[m].theta]
     
     def scan_analysis(self, msg):
         max_angle_sensor = msg.angle_max
@@ -283,118 +273,44 @@ class MCL(object):
         # Get MAP
 
         rospy.Subscriber('/map', OccupancyGrid, self.map_callback)
-        print(self.pf.x)
         
         self.pf.Particle_init()
 
         # Subscribe to topics
-        self.laser_points_marker_pub = rospy.Publisher('/typhoon/debug/laser_points', Marker, queue_size=1)
         rospy.Subscriber('/mavros/local_position/odom', Odometry, self.odom_callback)
         rospy.Subscriber('/base_scan', LaserScan, self.scan_callback)
 
-        # Publish Localization
-
-        x = self.pf.robot_odom.pose.pose.position.x 
-        y = self.pf.robot_odom.pose.pose.position.y
-
-        rospy.loginfo('The robot pose is : ')
-        print('x =',x)
-        print('y =',y)
+ 
 
 
     def scan_callback(self,msg):
         self.pf.scan_analysis(msg)
-
-        self.publish_laser_pts(msg)
-        
+        self.pf.Resample_particles()
         self.pf.dx = 0
         self.pf.dy = 0
         self.pf.dyaw = 0
 
 
     def map_callback(self, msg):
-        print('a do callback ',msg.info.width)
         self.pf.get_map(msg)
     
     def odom_callback(self, msg):
         self.pf.odom_processing(msg)
 
-    def get_2d_laser_points_marker(self, timestamp, frame_id, pts_in_map, marker_id, rgba):
-        msg = Marker()
-        msg.header.stamp = timestamp
-        msg.header.frame_id = frame_id
-        msg.ns = 'laser_points'
-        msg.id = marker_id
-        msg.type = 6
-        msg.action = 0
-        msg.points = [Point(pt[0], pt[1], pt[2]) for pt in pts_in_map]
-        msg.colors = [rgba for pt in pts_in_map]
 
-        for pt in pts_in_map:
-            assert((not np.isnan(pt).any()) and np.isfinite(pt).all())
-
-        msg.scale.x = 0.1
-        msg.scale.y = 0.1
-        msg.scale.z = 0.1
-        return msg    
-    
-    def publish_laser_pts(self, msg):
-        """Publishes the currently received laser scan points from the robot, after we subsampled
-        them in order to comparse them with the expected laser scan from each particle."""
-        if self.pf.robot_odom is None:
-            return
-
-        subsampled_ranges, subsampled_angles = self.pf.subsample_laser_scan(msg)
-
-        N = len(subsampled_ranges)
-        x = self.pf.robot_odom.pose.pose.position.x
-        y = self.pf.robot_odom.pose.pose.position.y
-        _, _ , yaw_in_map = tr.euler_from_quaternion(np.array([self.pf.robot_odom.pose.pose.orientation.x,
-                                                               self.pf.robot_odom.pose.pose.orientation.y,
-                                                               self.pf.robot_odom.pose.pose.orientation.z,
-                                                               self.pf.robot_odom.pose.pose.orientation.w]))
-
-        pts_in_map = [ (x + r*cos(theta + yaw_in_map),
-                        y + r*sin(theta + yaw_in_map),
-                        0.3) for r,theta in zip(subsampled_ranges, subsampled_angles)]
-
-        lpmarker = self.get_2d_laser_points_marker(msg.header.stamp, 'map', pts_in_map, 30000, ColorRGBA(1.0, 0.0, 0, 1.0))
-        self.laser_points_marker_pub.publish(lpmarker)
-
-
-    def get_particle_marker(self, timestamp, particle, marker_id):
-        """Returns an rviz marker that visualizes a single particle"""
-        msg = Marker()
-        msg.header.stamp = timestamp
-        msg.header.frame_id = 'map'
-        msg.ns = 'particles'
-        msg.id = marker_id
-        msg.type = 0  # arrow
-        msg.action = 0 # add/modify
-        msg.lifetime = rospy.Duration(1)
-
-        yaw_in_map = particle.theta
-        vx = cos(yaw_in_map)
-        vy = sin(yaw_in_map)
-
-        msg.color = ColorRGBA(0, 1.0, 0, 1.0)
-
-        msg.points.append(Point(particle.x, particle.y, 0.2))
-        msg.points.append(Point(particle.x + 0.3*vx, particle.y + 0.3*vy, 0.2))
-
-        msg.scale.x = 0.05
-        msg.scale.y = 0.15
-        msg.scale.z = 0.1
-        return msg
 
 
 if __name__ == '__main__':
 
-    numero_particulas = 50
+    numero_particulas = 10000
 
     Monte_carlo = MCL(numero_particulas)
 
     rospy.spin()
+
+
+
+
 
 
 
