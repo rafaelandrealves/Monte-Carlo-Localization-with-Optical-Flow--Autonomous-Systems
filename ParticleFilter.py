@@ -11,6 +11,11 @@ import tf.transformations as tr
 import random
 
 
+def id_array(_size):
+    new_array = np.zeros(_size)
+    for i in range(_size):
+        new_array[i] = i
+    return new_array
 
 class Particle(object):
     def __init__(self, _id, _pos, _weight, _theta=0):
@@ -80,10 +85,10 @@ class Particle_filter(object):
     def particle_update_weight(self, _pbmat, _newPF):
         newmat = np.zeros((_pbmat.shape[0],_pbmat.shape[1]))
         for m in range(self.M):
-            newmat[_newPF[m].pos[0], _newPF[m].pos[1]] = _newPF[m].w
+            newmat[int(_newPF[m].pos[0]), int(_newPF[m].pos[1])] = _newPF[m].w
         for i in range(_pbmat.shape[0]*_pbmat.shape[1]):
             idx = i/_pbmat.shape[1]
-            idxf = mt.floor(idx)
+            idxf = int(mt.floor(idx))
             idy = i-idxf*_pbmat.shape[1]
             _pbmat[idxf,idy] = _pbmat[idxf,idy]*newmat[idxf,idy]
         return _pbmat
@@ -98,8 +103,17 @@ class Particle_filter(object):
     def normalize_weights(self, _n_w): #criado
         total_w = sum(_n_w)
         for m in range(self.M):
-            _n_w[m] = _n_w[m]/total_w
+            _n_w[m] = float(_n_w[m])/total_w
         return _n_w
+
+    def make_1D_vect(self, _w):
+        id_vect = id_array(self.x*self.y)
+        w_vect = np.zeros(self.x*self.y)
+        for m in range(self.M):
+            mx = self.particles[m].pos[0]*self.y+self.particles[m].pos[1]
+            mx = int(mx)
+            w_vect[mx] = _w[m]
+        return id_vect, w_vect
 
     def Resample_particles(self):
         newPF = []
@@ -108,26 +122,21 @@ class Particle_filter(object):
         self.m_to_grid()
         for m in range(self.M):
             [new_pos,new_theta] = self.predict_next_odometry(m) #alterado
-            new_weight[m] = self.weight_change(m) #alterado
+            if self.particles[_m].w != 0:
+                new_weight[m] = self.weight_change(m) #alterado
             newPF.append(Particle(m, new_pos, new_weight[m], _theta = new_theta)) #alterado
         new_weight = self.normalize_weights(new_weight)
         eff_particles = self.det_eff_part(new_weight) #alterado
         print(new_weight)
         print('EFfective particle:',eff_particles)
-        if eff_particles < self.M/2:
+        if eff_particles < 3*(self.M)/4:
             for m in range(self.M):
-                lin_pb = np.random.uniform(0,1,(self.x,self.y))
-                lin_pb = self.particle_update_weight(lin_pb, newPF)
-                mx = np.argmax(lin_pb)
+                a, w_v = self.make_1D_vect(new_weight)
+                w_v /= sum(w_v)
+                mx = np.random.choice(a, p=w_v)
                 idx = mx/self.y
                 idxf = int(mt.floor(idx))
                 idy = mx-idxf*self.y
-                while (self.map[idx,idy] != 0):
-                    lin_pb[idx,idy] = 0
-                    mx = np.argmax(lin_pb)
-                    idx = mx/self.y
-                    idxf = int(mt.floor(idx))
-                    idy = mx-idxf*self.y
                 finPF.append(Particle(m,[idxf,idy],1))
             self.particles = finPF
 
@@ -153,15 +162,14 @@ class Particle_filter(object):
             else:
                 self.ranges_in_grid[0,i] = -1
                 self.ranges_in_grid[1,i] = -1
-    
-    def subsample(self, _msg): #ESTA
+
+    def subsample(self, _msg):
         subsample_range = []
         subsample_angle = []
-        j = 0
         for i in range(self.angle_readings):
             if self.ranges[i] < self.max_dist and self.ranges[i] > self.min_dist:
-                subsample_angle[j] = self.angle_vector[i]
-                subsample_range[j] = self.ranges[i]
+                subsample_angle.append(self.angle_vector[i])
+                subsample_range.append(self.ranges[i])
         return subsample_range, subsample_angle
 
     def compare_dist(self, _m, _i, _wt):
@@ -172,7 +180,7 @@ class Particle_filter(object):
         xw = xi+xx
         yw = yi+yy
         wa = 0
-        for i in range(-5,5):
+        for i in range(-2,2):
             if(xw+i > 0 and xw+i < self.x and yw+i > 0 and yw+i < self.y):
                 wa = wa + self.map[xw+i,yw+i]
         if wa > 0:
@@ -185,9 +193,15 @@ class Particle_filter(object):
         for i in range(self.angle_readings):
             if self.ranges_in_grid[0,i] != -1:
                 wt = wt + self.compare_dist(_m,i,wt)
-        wt = wt/float(self.angle_readings+1) #alterado
+        wt = wt#/float(self.angle_readings+1) #alterado
         #print(wt)
         return wt
+
+    def odometry_correct(self, _m):
+        xx = int(self.particles[_m].pos[0])
+        yy = int(self.particles[_m].pos[0])
+        if self.map[idx,idy] != 0:
+            self.particles[_m].w = 0
 
     def odom_processing(self,msg):
         #Save robot Odometry
@@ -321,7 +335,7 @@ class MCL(object):
 
 if __name__ == '__main__':
 
-    numero_particulas = 1000
+    numero_particulas = 100
 
     Monte_carlo = MCL(numero_particulas)
 
