@@ -126,6 +126,8 @@ class Particle_filter(object):
         return id_vect, w_vect
 
     def Resample_particles(self):
+        while self.max_dist == 0:
+            rospy.sleep(1)
         newPF = []
         finPF = [] #provisório
         new_weight = np.zeros(self.M) #alterado
@@ -141,11 +143,11 @@ class Particle_filter(object):
         new_weight = self.normalize_weights(new_weight)
         eff_particles = self.det_eff_part(new_weight) #alterado
         #print(new_weight)
-        print('EFfective particle:',eff_particles)
+        #print('EFfective particle:',eff_particles)
         b_idx = np.argmax(new_weight)
         max_weight = max(new_weight)
-        #print('The best estimate is given by x = ', self.particles[b_idx].pos[0],' and y = ', self.particles[b_idx].pos[0],' with weight = ', max_weight)
-        if eff_particles < 5*(self.M)/8:
+        print('The best estimate is given by x = ', self.particles[b_idx].pos[0]*self.map_resolution,' and y = ', self.particles[b_idx].pos[1]*self.map_resolution,' with weight = ', max_weight)
+        if eff_particles < (self.M)/2:
             a, w_v = self.make_1D_vect(new_weight)
             w_v /= sum(w_v)
             for m in range(self.M):
@@ -289,14 +291,15 @@ class Particle_filter(object):
 
         distance = mt.sqrt(self.dx**2 + self.dy**2)
         #
-        # if(self.dpitch > 0.001 or self.droll > 0.001):
+        # if(self.dpitch > 0.001 and self.droll > 0.001):
         #     self.static = 0
         #     #print(1)
         # else:
         #     self.static = 1
-        self.particles[m].pos[0] += self.dx + delta_x
-        self.particles[m].pos[1] += self.dy + delta_y
-        self.particles[m].theta += self.dyaw + ntheta
+        if( self.dx > 0.01 or self.dy > 0.01 or self.dyaw > 0.002):
+            self.particles[m].pos[0] += self.dx + delta_x * self.dx
+            self.particles[m].pos[1] += self.dy + delta_y * self.dy
+            self.particles[m].theta += self.dyaw + ntheta * self.dyaw
         #print('The particle',m,'is in (',self.particles[m].pos[0],',',self.particles[m].pos[1],')')
         self.odometry_correct(m)
         return [[self.particles[m].pos[0],self.particles[m].pos[1]],self.particles[m].theta]
@@ -331,7 +334,7 @@ class MCL(object):
 
         # Errors of associated devices
 
-        dynamics_translation_noise_std_dev   = 0.15
+        dynamics_translation_noise_std_dev   = 0.05
         dynamics_orientation_noise_std_dev   = 0.03
         beam_range_measurement_noise_std_dev = 0.3
 
@@ -347,7 +350,6 @@ class MCL(object):
         self.map_sub = rospy.Subscriber('/map', OccupancyGrid, self.map_callback)
 
         self.pf.Particle_init()
-        self.mutex = Lock()
 
         self.laser_points_marker_pub = rospy.Publisher('/typhoon/debug/laser_points', Marker, queue_size=1)
         self.particles_pub = rospy.Publisher('/typhoon/particle_filter/particles', MarkerArray, queue_size=1)
@@ -359,16 +361,8 @@ class MCL(object):
 
 
     def scan_callback(self,msg):
-        self.mutex.acquire()
-        self.publish_laser_pts(msg)
+        # self.publish_laser_pts(msg)
         self.pf.scan_analysis(msg)
-        self.pf.Resample_particles()
-        self.pf.dx = 0
-        self.pf.dy = 0
-        self.pf.dyaw = 0
-        self.pf.dpitch = 0
-        self.pf.droll = 0
-        self.mutex.release()
 
 
     def map_callback(self, msg):
@@ -376,9 +370,7 @@ class MCL(object):
         self.map_sub.unregister()
 
     def odom_callback(self, msg):
-        self.mutex.acquire()
         self.pf.odom_processing(msg)
-        self.mutex.release()
 
 
     # def get_2d_laser_points_marker(self, timestamp, frame_id, pts_in_map, marker_id, rgba):
@@ -399,31 +391,31 @@ class MCL(object):
     #     msg.scale.y = 0.1
     #     msg.scale.z = 0.1
     #     return msg
-
-    def publish_laser_pts(self, msg):
-        """Publishes the currently received laser scan points from the robot, after we subsampled
-        them in order to comparse them with the expected laser scan from each particle."""
-        if self.pf.robot_odom is None:
-            return
-
-        subsampled_ranges, subsampled_angles = self.pf.subsample(msg)
-
-
-        N = len(subsampled_ranges)
-        x = self.pf.robot_odom.pose.pose.position.x
-        y = self.pf.robot_odom.pose.pose.position.y
-        _, _ , yaw_in_map = tr.euler_from_quaternion(np.array([self.pf.robot_odom.pose.pose.orientation.x,
-                                                               self.pf.robot_odom.pose.pose.orientation.y,
-                                                               self.pf.robot_odom.pose.pose.orientation.z,
-                                                               self.pf.robot_odom.pose.pose.orientation.w]))
-
-        pts_in_map = [ (x ,
-                        y ,
-                        self.pf.map_resolution) for r,theta in zip(subsampled_ranges, subsampled_angles)]
-
-
-        # lpmarker = self.get_2d_laser_points_marker(msg.header.stamp, 'map', pts_in_map, 30000, ColorRGBA(0, 0.0, 0, 1.0))
-        # self.laser_points_marker_pub.publish(lpmarker)
+    #
+    # def publish_laser_pts(self, msg):
+    #     """Publishes the currently received laser scan points from the robot, after we subsampled
+    #     them in order to comparse them with the expected laser scan from each particle."""
+    #     if self.pf.robot_odom is None:
+    #         return
+    #
+    #     subsampled_ranges, subsampled_angles = self.pf.subsample(msg)
+    #
+    #
+    #     N = len(subsampled_ranges)
+    #     x = self.pf.robot_odom.pose.pose.position.x
+    #     y = self.pf.robot_odom.pose.pose.position.y
+    #     _, _ , yaw_in_map = tr.euler_from_quaternion(np.array([self.pf.robot_odom.pose.pose.orientation.x,
+    #                                                            self.pf.robot_odom.pose.pose.orientation.y,
+    #                                                            self.pf.robot_odom.pose.pose.orientation.z,
+    #                                                            self.pf.robot_odom.pose.pose.orientation.w]))
+    #
+    #     pts_in_map = [ (x ,
+    #                     y ,
+    #                     self.pf.map_resolution) for r,theta in zip(subsampled_ranges, subsampled_angles)]
+    #
+    #
+    #     # lpmarker = self.get_2d_laser_points_marker(msg.header.stamp, 'map', pts_in_map, 30000, ColorRGBA(0, 0.0, 0, 1.0))
+    #     # self.laser_points_marker_pub.publish(lpmarker)
 
 
     def get_particle_marker(self, timestamp, particle, marker_id):
@@ -471,12 +463,18 @@ class MCL(object):
         rate = rospy.Rate(1)
         while not rospy.is_shutdown():
             self.publish_particle_markers()
+            self.pf.Resample_particles()
+            self.pf.dx = 0
+            self.pf.dy = 0
+            self.pf.dyaw = 0
+            self.pf.dpitch = 0
+            self.pf.droll = 0
             rate.sleep()
 
 
 if __name__ == '__main__':
 
-    numero_particulas = 200
+    numero_particulas = 100
 
     Monte_carlo = MCL(numero_particulas)
 
