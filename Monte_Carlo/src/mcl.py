@@ -1,64 +1,50 @@
 #!/usr/bin/env python
-import rospy
-import tf
-import tf.transformations as tr
-from std_msgs.msg import String, Header, ColorRGBA
-from nav_msgs.msg import OccupancyGrid, MapMetaData, Odometry
-from geometry_msgs.msg import Twist, PoseStamped, Point
-from sensor_msgs.msg import LaserScan
-from visualization_msgs.msg import Marker, MarkerArray
-from math import sqrt, cos, sin, pi, atan2
-from threading import Thread, Lock
-from math import pi, log, exp
-import random
+# -- coding: utf-8 --
 import numpy as np
-import sys
-import pickle
+import math as mt
+import rospy
+from sensor_msgs.msg import LaserScan
+from nav_msgs.msg import OccupancyGrid, MapMetaData, Odometry
+from geometry_msgs.msg import Twist, PoseStamped, Point, Pose, Quaternion, PoseArray
+from tf.transformations  import euler_from_quaternion, quaternion_from_euler
+import tf.transformations as tr
+import random
+from visualization_msgs.msg import Marker, MarkerArray
+from std_msgs.msg import String, Header, ColorRGBA
+from threading import Thread, Lock
 
+def id_array(_size):
+    new_array = np.zeros(_size)
+    for i in range(_size):
+        new_array[i] = i
+    return new_array
 
 class Particle(object):
-    def __init__(self, id, x,y, theta):
-        self.x = x
-        self.y = y
-        self.id = id
-        self.theta = theta
+    def __init__(self, _id, _pos, _weight, _theta=0):
+        self.id = _id
+        self.pos = _pos
+        self.w = _weight
+        self.theta = _theta
 
-class ParticleFilter(object):
-    def __init__(self, num_particles, occ_grid_map, xmin, xmax, ymin, ymax,
-                 laser_min_range, laser_max_range, laser_min_angle, laser_max_angle,
-                 dynamics_translation_noise_std_dev,
-                 dynamics_orientation_noise_std_dev,
-                 beam_range_measurement_noise_std_dev):
-
-        self.num_particles = num_particles
-        self.ogm = occ_grid_map
-        self.grid_map = np.array(self.ogm.data, dtype='int8')
-        self.grid_map = self.grid_map.reshape((self.ogm.info.height, self.ogm.info.width))
-        self.grid_bin = (self.grid_map == 0).astype('uint8')  # Cell is True iff probability of being occupied is zero
-
-        # Workspace boundaries
-        self.xmax = xmax
-        self.xmin = xmin
-        self.ymin = ymin
-        self.ymax = ymax
-
-        self.laser_max_angle = laser_max_angle
-        self.laser_min_angle = laser_min_angle
-        self.laser_max_range = laser_max_range
-        self.laser_min_range = laser_min_range
-
-        # Std deviation of noise affecting translation in the dynamics model for particles
-        self.dynamics_translation_noise_std_dev = dynamics_translation_noise_std_dev
-
-        # Std deviation of noise affecting orientation in the dynamics model for particles
-        self.dynamics_orientation_noise_std_dev = dynamics_orientation_noise_std_dev
-
-        # Std deviation of noise affecting measured range from the laser measurement model
-        self.beam_range_measurement_noise_std_dev = beam_range_measurement_noise_std_dev
-
-        # Number of laser beams to simulate when predicting what a
-        # particle's measurement is going to be
-        self.eval_beams = 32
+class Particle_filter(object):
+    def __init__(self, _M, _dynamics_translation_noise_std_dev,
+                 _dynamics_orientation_noise_std_dev,
+                 _beam_range_measurement_noise_std_dev,
+                 _distance_range = [0,0], _angle_range = [0,0]):
+        self.M = _M
+        self.map = []
+        self.x = 0
+        self.y = 0
+        self.min_dist = _distance_range[0]
+        self.max_dist = _distance_range[1]
+        self.min_ang = _angle_range[0]
+        self.max_ang = _angle_range[1]
+        self.map_resolution = 0
+        self.particles = []
+        self.dynamics_orientation_noise_std_dev = _dynamics_orientation_noise_std_dev
+        self.dynamics_translation_noise_std_dev = _dynamics_translation_noise_std_dev
+        self.beam_range_measurement_noise_std_dev = _beam_range_measurement_noise_std_dev
+        self.i = 0
 
         # Previous odometry measurement of the robot
         self.last_robot_odom = None
@@ -66,447 +52,361 @@ class ParticleFilter(object):
         # Current odometry measurement of the robot
         self.robot_odom = None
 
-        # Relative motion since the last time particles were updated
+        # Angle vector/readings
+
+        self.angle_vector = []
+        self.angle_readings = 0
+
+        # Init ranges of ogm
+        self.first_time = True
+        self.ranges_in_grid = []
+        self.ranges = []
+        # variance of values in point coordinates
+
+        self.dyaw = 0
         self.dx = 0
         self.dy = 0
-        self.dyaw = 0
+        self.static = 1
 
-        self.particles = []
-        self.weights = []
+    def Particle_init(self):
+        i = 0
+        for m in range(self.M):
+            while self.x == 0:
+                rospy.sleep(1)
+            lin_pb = np.random.uniform(0,1,(self.x,self.y))
+            mx = np.argmax(lin_pb)
+            idx = mx/self.y
+            idxf = int(mt.floor(idx))
+            idy = mx-idxf*self.y
+            while(self.map[idxf,idy] != 0):
+                lin_pb[idxf,idy] = 0
+                mx = np.argmax(lin_pb)
+                idx = mx/self.y
+                idxf = int(mt.floor(idx))
+                idy = mx-idxf*self.y
+            # if(m==5):
+            #     self.particles.append(Particle(m,[422,384],1))
+            #     print('map=',self.map[422,384])
+            # else:
+            self.particles.append(Particle(m,[idx,idy],1))
+            #print('map=',self.map[idxf,idy])
 
-    def get_random_free_state(self):
-        while True:
-            # Note: we initialize particles closer to the robot's initial
-            # position in order to make the initialization easier
-            xrand = np.random.uniform(self.xmin*0.2, self.xmax*0.2)
-            yrand = np.random.uniform(self.ymin*0.2, self.ymax*0.2)
-            row, col = self.metric_to_grid_coords(xrand, yrand)
-            if self.grid_bin[row, col]:
-                theta = np.random.uniform(0, 2*pi)
-                return xrand, yrand, theta
+    def particle_update_weight(self, _pbmat, _newPF):
+        newmat = np.zeros((_pbmat.shape[0],_pbmat.shape[1]))
+        for m in range(self.M):
+            newmat[int(_newPF[m].pos[0]), int(_newPF[m].pos[1])] = _newPF[m].w
+        for i in range(_pbmat.shape[0]*_pbmat.shape[1]):
+            idx = i/_pbmat.shape[1]
+            idxf = int(mt.floor(idx))
+            idy = i-idxf*_pbmat.shape[1]
+            _pbmat[idxf,idy] = _pbmat[idxf,idy]*newmat[idxf,idy]
+        return _pbmat
 
-    def init_particles(self):
-        """Initializes particles uniformly randomly with map frame coordinates,
-        within the boundaries set by xmin,xmax, ymin,ymax"""
-        for i in xrange(self.num_particles):
-            xrand, yrand, theta = self.get_random_free_state()
-            # Note: same orientation as the initial orientation of the robot
-            # to make initialization easier
-            self.particles.append(Particle(i, xrand, yrand, 0))
+    def det_eff_part(self, _w_vect): #criado
+        sum_weight = 0
+        for m in range(self.M):
+            sum_weight = sum_weight + _w_vect[m]**2
+        n_eff = 1/(sum_weight)
+        return n_eff
 
-    def handle_observation(self, laser_scan, dt):
-        """Does prediction, weight update, and resampling."""
+    def normalize_weights(self, _n_w): #criado
+        total_w = sum(_n_w)
+        for m in range(self.M):
+            _n_w[m] = float(_n_w[m])/total_w
+        return _n_w
 
-        # TODO: for every particle
-        # 1) Predict its relative motion since the last time an observation was received using
-        # predict_particle_odometry().
-        # 2) Compute the squared norm of the difference between the particle's predicted laser scan
-        # and the actual laser scan
+    def make_1D_vect(self, _w):
+        id_vect = self.x*self.y
+        w_vect = np.zeros(self.x*self.y)
+        for m in range(self.M):
+            mx = self.particles[m].pos[0]*self.y+self.particles[m].pos[1]
+            mx = int(mx)
+            w_vect[mx] = _w[m]
+        return id_vect, w_vect
 
-        # TODO: exponentiate the prediction errors you computed above
-        # using numerical stability tricks such as
-        # http://timvieira.github.io/blog/post/2014/02/11/exp-normalize-trick/
-        # if you think it is necessary
+    def Resample_particles(self):
+        while self.max_dist == 0:
+            rospy.sleep(1)
+        newPF = []
+        finPF = [] #provisório
+        new_weight = np.zeros(self.M) #alterado
+        #rospy.sleep(10)
+        self.m_to_grid()
+        for m in range(self.M):
+            [new_pos,new_theta] = self.predict_next_odometry(m) #alterado
+            if self.particles[m].w != 0:
+                new_weight[m] = self.weight_change(m) #alterado
+            #if m == 1:
+            
+            newPF.append(Particle(m, new_pos, new_weight[m], _theta = new_theta)) #alterado
+        new_weight = self.normalize_weights(new_weight)
+        eff_particles = self.det_eff_part(new_weight) #alterado
+        print('A particula 2 esta na posica x:',self.particles[2].pos[0],'e y:',self.particles[2].pos[1],'\n')
+        #print(new_weight)
+        print('EFfective particle:',eff_particles)
+        b_idx = np.argmax(new_weight)
+        max_weight = max(new_weight)
+        #print('The best estimate is given by x = ', self.particles[b_idx].pos[0]*self.map_resolution,' and y = ', self.particles[b_idx].pos[1]*self.map_resolution,' with weight = ', max_weight)
+        if eff_particles < 2*(self.M)/3:
+            a, w_v = self.make_1D_vect(new_weight)
+            w_v /= sum(w_v)
+            mx = np.random.choice(a, self.M, p=w_v)
+            for m in range(self.M):
+                idx = mx[m]/self.y
+                idxf = int(mt.floor(idx))
+                idy = int(mx[m]-idxf*self.y)
+                finPF.append(Particle(m,[idxf,idy],1, _theta = self.particles[m].theta))
+            self.particles = finPF
 
-        errors = []
-        #self.weights = [0] * len(self.particles)
-        for particle in self.particles:
-            self.predict_particle_odometry(particle)
-            #for each particle, compute the laser scan difference
-            error = self.get_prediction_error_squared(laser_scan, particle)
-            #sig_error = self.sigmoid(error)
-            errors.append(error)
-            #self.weights.append(exp(-error))
+    def angle_vect_make(self, _max_angle, _min_angle, _angle_inc):
+        n_values = int((_max_angle-_min_angle)/_angle_inc)
+        self.angle_vector = np.zeros((n_values,1))
+        self.angle_readings = n_values
+        for i in range(n_values):
+            self.angle_vector[i] = _min_angle+_angle_inc*i
 
-        self.weights = [exp(-error) for error in errors]
-        weight_sum = sum(self.weights)
-        N_eff = 0
-        #N_eff = sum([1 / ((weight / weight_sum) ** 2) for weight in self.weights])
-        #print "effective sample size", N_eff
+    def map_resolve_size(self, _data):
+        self.map = np.zeros((self.x,self.y))
+        for i in range(self.x):
+            for j in range(self.y):
+                self.map[i,j] = _data[j*self.x+i]
 
-        # Do resampling. Depending on how you implement it you might
-        # or might not need to normalize your weights by their sum, so
-        # they are treated as probabilities
+    def m_to_grid(self):
+        self.ranges_in_grid = np.zeros((2,self.angle_readings))
+        for i in range(self.angle_readings):
+            if self.ranges[i] < self.max_dist and self.ranges[i] > self.min_dist:
+                self.ranges_in_grid[0,i] = self.ranges[i]/self.map_resolution
+                self.ranges_in_grid[1,i] = self.ranges[i]/self.map_resolution
+            else:
+                self.ranges_in_grid[0,i] = -1
+                self.ranges_in_grid[1,i] = -1
 
-        # particle deprivation:
-        # approach 1: calculate sample size by variance
-        # get the partice id among the survived particles after resampling
-        new_particles = []
-        self.resample(new_particles)
-        #particle_indexes = self.resample(new_particles)
-        #remove duplicates
-        """
-        N_eff_id = set(particle_indexes)
-        print "N_eff_id",[id for id in N_eff_id]
-        #effective sample size based on particle's contribution
-        N_eff_size = len(N_eff_id)
-        #print "N_eff_size", N_eff_size
-        """
+    def subsample(self, _msg):
+        subsample_range = []
+        subsample_angle = []
+        for i in range(self.angle_readings):
+            if self.ranges[i] < self.max_dist and self.ranges[i] > self.min_dist:
+                subsample_angle.append(self.angle_vector[i])
+                subsample_range.append(self.ranges[i])
+        return subsample_range, subsample_angle
 
-        # approach 2: calculate the effective sample size by weight
-        sig_weight = [self.sigmoid(error) for error in errors]
-        N_eff_weight = sum([1 / (weight ** 2) for weight in sig_weight])
-        #print "N_eff_weight", N_eff_weight
-
-        N_eff = N_eff_weight
-        #N_eff = N_eff_size
-
-        # address particle deprivation
-        # 1. resample only when N_eff > N_thresh
-        if N_eff > 50:
-            self.particles = new_particles
-
-        #print [particle.id for particle in self.particles]
-        #print "weight", self.weights
-
-    def divide_up(self, id, particle, num, particle_list):
-        for i in xrange(int(num)):
-            xrand = np.random.uniform(particle.x*-0.5, particle.x*0.5)
-            yrand = np.random.uniform(particle.y*-0.5, particle.y*0.5)
-            theta = np.random.uniform(particle.theta*-0.5, particle.theta*0.5)
-            particle_list.append(Particle(id, xrand, yrand, theta))
-            id += 1
-
-    def sigmoid(self, x):
-        """Numerically-stable sigmoid function."""
-        if x >= 0:
-            z = exp(-x)
-            return 1 / (1 + z)
+    def compare_dist(self, _m, _i):
+        ang_dist_x = mt.cos(self.angle_vector[_i]+self.particles[_m].theta)*self.ranges_in_grid[0,_i]
+        ang_dist_y = mt.sin(self.angle_vector[_i]+self.particles[_m].theta)*self.ranges_in_grid[1,_i]
+        xx = int(mt.floor(ang_dist_x))
+        yy = int(mt.floor(ang_dist_y))
+        xi = int(self.particles[_m].pos[0])
+        yi = int(self.particles[_m].pos[1])
+        xw = xi+xx
+        yw = yi+yy
+        wa = 0
+        for i in range(-1,2):
+            if(xw+i > 0 and xw+i < self.x and yw+i > 0 and yw+i < self.y):
+                wa = wa + self.map[xw+i,yw+i]
+        if wa > 0:
+            return 1
         else:
-            # if x is less than zero then z will be small, denom can't be
-            # zero because it's 1+z.
-            z = exp(x)
-            return z / (1 + z)
+            return 0
 
-    def resample(self, new_particles):
+    def weight_change(self, _m):
+        # self.i += 1
+        # if self.static == 0:
+        #     return self.particles[_m].w
+        # print(self.i)
+        wt = 0
+        for i in range(self.angle_readings):
+            if self.ranges_in_grid[0,i] != -1:
+                wt = wt + self.compare_dist(_m,i)
+        return wt
 
-        # TODO: sample particle i with probability that
-        # is proportional to its weight w_i. Sampling
-        # can be done with repetition/replacement, so
-        # you can sample the same particle more than once.
+    def odometry_correct(self, _m):
+        xx = int(self.particles[_m].pos[0])
+        yy = int(self.particles[_m].pos[1])
+        if xx >= self.x or xx < 0 or yy >= self.y or yy < 0:
+            self.particles[_m].w = 0
+            return
+        if self.map[xx,yy] != 0:
+            self.particles[_m].w = 0
 
-        #particle_indexes = []
-        sample_u = np.random.uniform(0,1)
-        index = int(sample_u * (self.num_particles - 1))
-        beta = 0.0
-        if self.weights == []:
-            self.weights = [1] * self.num_particles
-            print self.weights
-        max_w = max(self.weights)
-        #print "max_w", max_w
-        #print "weight", self.weights
-        for particle in self.particles:
-            beta += np.random.uniform(0,1) * 2.0 * max_w
-            while beta > self.weights[index]:
-                beta -= self.weights[index]
-                index = (index + 1) % self.num_particles
-
-            particle = self.particles[index]
-            #particle_indexes.append(particle.id)
-            new_particles.append(Particle(particle.id, particle.x, particle.y, particle.theta))
-
-        #self.particles = new_particles
-        #return particle_indexes
-
-    def simulate_laser_scan_for_particle(self, x, y, yaw_in_map, angles, min_range, max_range):
-        """If the robot was at the given particle, what would its laser scan
-        be (in the known map)? Returns the predicted laser ranges if a particle with state (x,y,yaw_in_map)
-        is to scan along relative angles in angles."""
-        # for every relative angle in angles
-        # 1. The absolute angle based on the robot's orientation is computed
-        # 2. Ray tracing from (x,y) along the abosulte angle using step size range_step is done
-        #    (a) If the currently examined point is within the bounds of the workspace
-        #        stop if it meets an obstacle or if it reaches max_range
-        #    (b) If the currently examined point is outside the bounds of the workspace
-        #        stop if it reaches max_range
-        # 3. The computed collection of ranges corresponding to the given angles is returned
-
-        ranges = []
-        range_step = self.ogm.info.resolution
-
-        for angle in angles:
-            phi = yaw_in_map + angle
-
-            r = min_range
-            while r <= max_range:
-                xm = x + r*cos(phi)
-                ym = y + r*sin(phi)
-
-                if xm > self.xmax or xm < self.xmin:
-                    break
-
-                if ym > self.ymax or ym < self.ymin:
-                    break
-
-                row, col = self.metric_to_grid_coords(xm, ym)
-                free = self.grid_bin[row, col].all()
-                if not free:
-                    break
-
-                r += range_step
-
-            ranges.append(r)
-
-        return ranges
+    def odom_processing(self,msg):
+        #Save robot Odometry
 
 
-    def subsample_laser_scan(self, laser_scan_msg):
-        """Subsamples a set number of beams (self.eval_beams) from the incoming actual laser scan. It also
-        converts the Inf range measurements into max_range range measurements, in order to be able to
-        compute a difference."""
-
-        # To convert the laser points from the husky_1/base_laser frame, whose z-axis points downwards
-        # to the same frame pointing upwards
-
-        N = len(laser_scan_msg.ranges)
-        ranges_in_upwards_baselaser_frame = laser_scan_msg.ranges
-        angles_in_baselaser_frame = [(laser_scan_msg.angle_max - laser_scan_msg.angle_min)*float(i)/N + laser_scan_msg.angle_min for i in xrange(N)]
-
-        step = N/self.eval_beams
-        angles_in_upwards_baselaser_frame = angles_in_baselaser_frame[::step]
-        ranges_in_upwards_baselaser_frame = ranges_in_upwards_baselaser_frame[::-step]
-
-        assert (len(ranges_in_upwards_baselaser_frame) == len(angles_in_upwards_baselaser_frame))
-
-        actual_ranges = []
-        for r in ranges_in_upwards_baselaser_frame:
-            if r >= self.laser_min_range and r <= self.laser_max_range:
-                actual_ranges.append(r)
-
-            if r < self.laser_min_range:
-                actual_ranges.append(self.laser_min_range)
-
-            if r > self.laser_max_range:
-                actual_ranges.append(self.laser_max_range)
-
-
-        return actual_ranges, angles_in_upwards_baselaser_frame
-
-    def get_prediction_error_squared(self, laser_scan_msg, particle):
-        """
-        This function evaluates the squared norm of the difference/error between the
-        scan in laser_scan_msg and the one that was predicted by the given particle.
-
-        Assume that the bearing of each beam relative to the robot's orientation has zero noise,
-        so the only noise in the measurement comes from the range of each beam and is
-        distributed as N(0, beam_range_measurement_std_dev^2)
-        """
-
-        # If the particle is out of the bounds of the workspace
-        # give it a large error
-        if particle.x < self.xmin or particle.x > self.xmax:
-            return 300
-
-        if particle.y < self.ymin or particle.y > self.ymax:
-            return 300
-
-        # If the particle falls inside an obstacle
-        # give it a large error
-        row, col = self.metric_to_grid_coords(particle.x, particle.y)
-        if row >= 201 or col >=201:
-            return 300
-
-        if not self.grid_bin[row, col]:
-            return 300
-
-        assert (self.laser_min_range >= 0)
-        assert (self.laser_max_range > 0)
-
-        # TODO: subsample the recived actual laser scan using the
-        # subsample_laser_scan method above
-        # actual ranges and angles
-        [actual_ranges, angles] = self.subsample_laser_scan(laser_scan_msg)
-
-        min_range = min(actual_ranges)
-        max_range = max(actual_ranges)
-        #print "min_range", min_range
-        #print "max_range", max_range
-        # TODO: simulate a laser scan using one of the methods of this class
-        predict_ranges = self.simulate_laser_scan_for_particle(particle.x, particle.y, particle.theta, angles, self.laser_min_range, self.laser_max_range)
-        #predict_ranges = self.simulate_laser_scan_for_particle(particle.x, particle.y, particle.theta, angles, min_range, max_range)
-
-        # TODO: compute the difference bwteen predicted ranges and actual ranges
-
-        diff = [actual_range - predict_range for actual_range, predict_range in zip(actual_ranges, predict_ranges)]
-        #print "diff", diff
-        # Take the squared norm of that difference
-        norm_error = 0
-        norm_error = np.linalg.norm(diff)
-        print "norm_error", norm_error
-        return norm_error**2
-
-    def handle_odometry(self, robot_odom):
-        """Compute the relative motion of the robot from the previous odometry measurement
-        to the current odometry measurement."""
+        # Determine the difference between new and old values
         self.last_robot_odom = self.robot_odom
-        self.robot_odom = robot_odom
+        self.robot_odom = msg
 
         if self.last_robot_odom:
 
             p_map_currbaselink = np.array([self.robot_odom.pose.pose.position.x,
-                                           self.robot_odom.pose.pose.position.y,
-                                           self.robot_odom.pose.pose.position.z])
+                                            self.robot_odom.pose.pose.position.y,
+                                            self.robot_odom.pose.pose.position.z])
 
             p_map_lastbaselink = np.array([self.last_robot_odom.pose.pose.position.x,
-                                           self.last_robot_odom.pose.pose.position.y,
-                                           self.last_robot_odom.pose.pose.position.z])
+                                            self.last_robot_odom.pose.pose.position.y,
+                                            self.last_robot_odom.pose.pose.position.z])
 
             q_map_lastbaselink = np.array([self.last_robot_odom.pose.pose.orientation.x,
-                                           self.last_robot_odom.pose.pose.orientation.y,
-                                           self.last_robot_odom.pose.pose.orientation.z,
-                                           self.last_robot_odom.pose.pose.orientation.w])
+                                            self.last_robot_odom.pose.pose.orientation.y,
+                                            self.last_robot_odom.pose.pose.orientation.z,
+                                            self.last_robot_odom.pose.pose.orientation.w])
 
             q_map_currbaselink = np.array([self.robot_odom.pose.pose.orientation.x,
-                                           self.robot_odom.pose.pose.orientation.y,
-                                           self.robot_odom.pose.pose.orientation.z,
-                                           self.robot_odom.pose.pose.orientation.w])
+                                            self.robot_odom.pose.pose.orientation.y,
+                                            self.robot_odom.pose.pose.orientation.z,
+                                            self.robot_odom.pose.pose.orientation.w])
 
+            # Save quaternion units, with axis of rotation
+            # Does the rotation matrix
             R_map_lastbaselink = tr.quaternion_matrix(q_map_lastbaselink)[0:3,0:3]
 
             p_lastbaselink_currbaselink = R_map_lastbaselink.transpose().dot(p_map_currbaselink - p_map_lastbaselink)
+
+            q_map_lastbaselink_euler = euler_from_quaternion(q_map_lastbaselink)
             q_lastbaselink_currbaselink = tr.quaternion_multiply(tr.quaternion_inverse(q_map_lastbaselink), q_map_currbaselink)
 
             _, _, yaw_diff = tr.euler_from_quaternion(q_lastbaselink_currbaselink)
 
+
             self.dyaw += yaw_diff
             self.dx += p_lastbaselink_currbaselink[0]
             self.dy += p_lastbaselink_currbaselink[1]
+            #print('dif x',self.dx,'diif y',self.dy,'diff yaw',self.dyaw)
 
 
-    def predict_particle_odometry(self, particle):
-        """
-        Where will the particle go after time dt passes?
-        This function modifies the particle's state by simulating the effects
-        of the given control forward in time.
+    def predict_next_odometry(self, m):
 
-        Assume Dubins dynamics with variable forward velocity for the Husky.
-        """
-
-        nx = random.gauss(0, self.dynamics_translation_noise_std_dev)
-        ny = random.gauss(0, self.dynamics_translation_noise_std_dev)
+        delta_x = random.gauss(0, self.dynamics_translation_noise_std_dev)
+        delta_y = random.gauss(0, self.dynamics_translation_noise_std_dev)
         ntheta = random.gauss(0, self.dynamics_orientation_noise_std_dev)
 
-        v = sqrt(self.dx**2 + self.dy**2)
+        distance = mt.sqrt(self.dx**2 + self.dy**2)
+        #
+        # if(self.dpitch > 0.001 and self.droll > 0.001):
+        #     self.static = 0
+        #     #print(1)
+        # else:
+        #     self.static = 1
+        
+        if( abs(self.dx) > 0.01 or abs(self.dy) > 0.01 or abs(self.dyaw) > 0.002):
+            self.particles[m].pos[0] += self.dx + delta_x * self.dx
+            self.particles[m].pos[1] += self.dy + delta_y * self.dy
+            self.particles[m].theta += self.dyaw + ntheta * self.dyaw
+        #print('The particle',m,'is in (',self.particles[m].pos[0],',',self.particles[m].pos[1],')')
+        self.odometry_correct(m)
+        return [[self.particles[m].pos[0],self.particles[m].pos[1]],self.particles[m].theta]
 
-        # Don't let the particle propagation be dominated by noise
-        if abs(v) < 1e-10 and abs(self.dyaw) < 1e-5:
-            return
+    def scan_analysis(self, msg):
+        if self.first_time == True:
+            max_angle_sensor = msg.angle_max
+            min_angle_sensor = msg.angle_min
+            angle_inc_sensor = msg.angle_increment
+            self.max_dist = msg.range_max
+            self.min_dist = msg.range_min
+            self.angle_vect_make(max_angle_sensor, min_angle_sensor, angle_inc_sensor)
+            self.first_time = False
+        self.ranges = msg.ranges
 
-        particle.x += v * cos(particle.theta) + nx
-        particle.y += v * sin(particle.theta) + ny
-        particle.theta += self.dyaw + ntheta
+    def get_map(self, msg):
+        self.x = msg.info.width
+        self.y = msg.info.height
+        data = msg.data
+        self.map_resolve_size(data)
+        self.map_resolution = msg.info.resolution
 
 
-    def metric_to_grid_coords(self, x, y):
-        """Converts metric coordinates to occupancy grid coordinates"""
 
-        gx = (x - self.ogm.info.origin.position.x) / self.ogm.info.resolution
-        gy = (y - self.ogm.info.origin.position.y) / self.ogm.info.resolution
-        row = min(max(int(gy), 0), self.ogm.info.height)
-        col = min(max(int(gx), 0), self.ogm.info.width)
-        return (row, col)
+class MCL(object):
+    def __init__(self,num_particles):
 
-class MonteCarloLocalization(object):
+        # Init node
 
-    def __init__(self, num_particles, xmin, xmax, ymin, ymax):
-        rospy.init_node('monte_carlo_localization', anonymous=False)
-        self.map_file = rospy.Subscriber("/map", nav_msgs.msg.OccupancyGrid, self.processMap)
+        rospy.init_node('Monte_Carlo')
 
-        dynamics_translation_noise_std_dev   = rospy.get_param("~dynamics_translation_noise_std_dev")
-        dynamics_orientation_noise_std_dev   = rospy.get_param("~dynamics_orientation_noise_std_dev")
-        beam_range_measurement_noise_std_dev = rospy.get_param("~beam_range_measurement_noise_std_dev")
+        # Errors of associated devices
 
-        pkl_file = open(self.map_file, 'rb')
-        self.ogm = pickle.load(pkl_file)
-        pkl_file.close()
+        dynamics_translation_noise_std_dev   = 0.15
+        dynamics_orientation_noise_std_dev   = 0.03
+        beam_range_measurement_noise_std_dev = 0.3
 
-        self.q_baselink_baselaser = np.array([1.0, 0, 0, 0])
-        self.R_baselink_baselaser = tr.quaternion_matrix(self.q_baselink_baselaser)[0:3,0:3]
-        self.p_baselink_baselaser = np.array([0.337, 0.0, 0.308])
+        # Get the Particle Filter running
 
-        self.pf = ParticleFilter(num_particles, self.ogm, xmin, xmax, ymin, ymax, 0, 0, 0, 0,
+        self.pf = Particle_filter(num_particles,
                                  dynamics_translation_noise_std_dev,
                                  dynamics_orientation_noise_std_dev,
                                  beam_range_measurement_noise_std_dev)
 
-        self.pf.init_particles()
-        self.last_scan = None
-        self.mutex = Lock()
+        # Get MAP
 
-        self.laser_points_marker_pub = rospy.Publisher('/husky_1/debug/laser_points', Marker, queue_size=1)
-        self.particles_pub = rospy.Publisher('/husky_1/particle_filter/particles', MarkerArray, queue_size=1)
-        self.odom_sub = rospy.Subscriber('/mavros/local_position/odom', Odometry, self.odometry_callback, queue_size=1)
-        self.laser_sub = rospy.Subscriber('/base_scan', LaserScan, self.laser_scan_callback, queue_size=1)
+        self.map_sub = rospy.Subscriber('/map', OccupancyGrid, self.map_callback)
 
-    def odometry_callback(self, msg):
-        self.mutex.acquire()
-        self.pf.handle_odometry(msg)
-        self.mutex.release()
+        self.pf.Particle_init()
 
-    def get_2d_laser_points_marker(self, timestamp, frame_id, pts_in_map, marker_id, rgba):
-        msg = Marker()
-        msg.header.stamp = timestamp
-        msg.header.frame_id = frame_id
-        msg.ns = 'laser_points'
-        msg.id = marker_id
-        msg.type = 6
-        msg.action = 0
-        msg.points = [Point(pt[0], pt[1], pt[2]) for pt in pts_in_map]
-        msg.colors = [rgba for pt in pts_in_map]
-
-        for pt in pts_in_map:
-            assert((not np.isnan(pt).any()) and np.isfinite(pt).all())
-
-        msg.scale.x = 0.1
-        msg.scale.y = 0.1
-        msg.scale.z = 0.1
-        return msg
+        self.laser_points_marker_pub = rospy.Publisher('/typhoon/debug/laser_points', Marker, queue_size=1)
+        self.particles_pub = rospy.Publisher('/typhoon/particle_filter/particles', MarkerArray, queue_size=1)
+        # Subscribe to topics
+        rospy.Subscriber('/mavros/local_position/odom', Odometry, self.odom_callback)
+        rospy.Subscriber('/base_scan', LaserScan, self.scan_callback)
 
 
-    def laser_scan_callback(self, msg):
-        self.pf.laser_min_angle = msg.angle_min
-        self.pf.laser_max_angle = msg.angle_max
-        self.pf.laser_min_range = msg.range_min
-        self.pf.laser_max_range = msg.range_max
 
-        dt_since_last_scan = 0
 
-        if self.last_scan:
-            dt_since_last_scan = (msg.header.stamp - self.last_scan.header.stamp).to_sec()
+    def scan_callback(self,msg):
+        # self.publish_laser_pts(msg)
+        self.pf.scan_analysis(msg)
 
-        self.mutex.acquire()
-        self.publish_laser_pts(msg)
-        self.pf.handle_observation(msg, dt_since_last_scan)
 
-        self.pf.dx = 0
-        self.pf.dy = 0
-        self.pf.dyaw = 0
+    def map_callback(self, msg):
+        self.pf.get_map(msg)
+        self.map_sub.unregister()
 
-        self.mutex.release()
-        self.last_scan = msg
+    def odom_callback(self, msg):
+        self.pf.odom_processing(msg)
 
-    def publish_laser_pts(self, msg):
-        """Publishes the currently received laser scan points from the robot, after we subsampled
-        them in order to comparse them with the expected laser scan from each particle."""
-        if self.pf.robot_odom is None:
-            return
 
-        subsampled_ranges, subsampled_angles = self.pf.subsample_laser_scan(msg)
-
-        N = len(subsampled_ranges)
-        x = self.pf.robot_odom.pose.pose.position.x
-        y = self.pf.robot_odom.pose.pose.position.y
-        _, _ , yaw_in_map = tr.euler_from_quaternion(np.array([self.pf.robot_odom.pose.pose.orientation.x,
-                                                               self.pf.robot_odom.pose.pose.orientation.y,
-                                                               self.pf.robot_odom.pose.pose.orientation.z,
-                                                               self.pf.robot_odom.pose.pose.orientation.w]))
-
-        pts_in_map = [ (x + r*cos(theta + yaw_in_map),
-                        y + r*sin(theta + yaw_in_map),
-                        0.3) for r,theta in zip(subsampled_ranges, subsampled_angles)]
-
-        lpmarker = self.get_2d_laser_points_marker(msg.header.stamp, 'map', pts_in_map, 30000, ColorRGBA(1.0, 0.0, 0, 1.0))
-        self.laser_points_marker_pub.publish(lpmarker)
+    # def get_2d_laser_points_marker(self, timestamp, frame_id, pts_in_map, marker_id, rgba):
+    #     msg = Marker()
+    #     msg.header.stamp = timestamp
+    #     msg.header.frame_id = frame_id
+    #     msg.ns = 'laser_points'
+    #     msg.id = marker_id
+    #     msg.type = 6
+    #     msg.action = 0
+    #     msg.points = [Point(pt[0], pt[1], pt[2]) for pt in pts_in_map]
+    #     msg.colors = [rgba for pt in pts_in_map]
+    #
+    #     for pt in pts_in_map:
+    #         assert((not np.isnan(pt).any()) and np.isfinite(pt).all())
+    #
+    #     msg.scale.x = 0.1
+    #     msg.scale.y = 0.1
+    #     msg.scale.z = 0.1
+    #     return msg
+    #
+    # def publish_laser_pts(self, msg):
+    #     """Publishes the currently received laser scan points from the robot, after we subsampled
+    #     them in order to comparse them with the expected laser scan from each particle."""
+    #     if self.pf.robot_odom is None:
+    #         return
+    #
+    #     subsampled_ranges, subsampled_angles = self.pf.subsample(msg)
+    #
+    #
+    #     N = len(subsampled_ranges)
+    #     x = self.pf.robot_odom.pose.pose.position.x
+    #     y = self.pf.robot_odom.pose.pose.position.y
+    #     _, _ , yaw_in_map = tr.euler_from_quaternion(np.array([self.pf.robot_odom.pose.pose.orientation.x,
+    #                                                            self.pf.robot_odom.pose.pose.orientation.y,
+    #                                                            self.pf.robot_odom.pose.pose.orientation.z,
+    #                                                            self.pf.robot_odom.pose.pose.orientation.w]))
+    #
+    #     pts_in_map = [ (x ,
+    #                     y ,
+    #                     self.pf.map_resolution) for r,theta in zip(subsampled_ranges, subsampled_angles)]
+    #
+    #
+    #     # lpmarker = self.get_2d_laser_points_marker(msg.header.stamp, 'map', pts_in_map, 30000, ColorRGBA(0, 0.0, 0, 1.0))
+    #     # self.laser_points_marker_pub.publish(lpmarker)
 
 
     def get_particle_marker(self, timestamp, particle, marker_id):
@@ -521,13 +421,20 @@ class MonteCarloLocalization(object):
         msg.lifetime = rospy.Duration(1)
 
         yaw_in_map = particle.theta
-        vx = cos(yaw_in_map)
-        vy = sin(yaw_in_map)
-
+        vx = mt.cos(yaw_in_map)
+        vy = mt.sin(yaw_in_map)
         msg.color = ColorRGBA(0, 1.0, 0, 1.0)
+        if marker_id == 5:
+            msg.color = ColorRGBA(1.0, 0.0, 0, 1.0)
 
-        msg.points.append(Point(particle.x, particle.y, 0.2))
-        msg.points.append(Point(particle.x + 0.3*vx, particle.y + 0.3*vy, 0.2))
+        #print('This is Particle x-',particle.pos[0],'This is Particle y-',particle.pos[1])
+
+        gx = particle.pos[0] * self.pf.map_resolution - 10
+        gy = particle.pos[1] * self.pf.map_resolution - 10
+        quat = Quaternion(*quaternion_from_euler(0,0,particle.theta))
+        msg.points.append(Point(gx, gy,0))
+        msg.points.append(Point(gx + self.pf.map_resolution*vx, gy + self.pf.map_resolution*vy, 0))
+        msg.pose.orientation = quat
 
         msg.scale.x = 0.05
         msg.scale.y = 0.15
@@ -544,20 +451,23 @@ class MonteCarloLocalization(object):
         self.particles_pub.publish(ma)
 
     def run(self):
-        rate = rospy.Rate(20)
+        rate = rospy.Rate(1)
         while not rospy.is_shutdown():
             self.publish_particle_markers()
+            self.pf.Resample_particles()
+            self.pf.dx = 0
+            self.pf.dy = 0
+            self.pf.dyaw = 0
+
             rate.sleep()
 
 
 if __name__ == '__main__':
-    num_particles = 50
 
-    # Workspace boundaries in meters
-    xmin = -20
-    xmax = 20
-    ymin = -20
-    ymax = 20
+    numero_particulas = 100
 
-    mcl = MonteCarloLocalization(num_particles, xmin, xmax, ymin, ymax)
-    mcl.run()
+    Monte_carlo = MCL(numero_particulas)
+
+    Monte_carlo.run()
+
+    #rospy.spin()
