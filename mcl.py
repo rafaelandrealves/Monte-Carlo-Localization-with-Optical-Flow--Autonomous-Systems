@@ -62,6 +62,7 @@ class Particle_filter(object):
         self.ranges_in_grid = []
         self.ranges = []
         # variance of values in point coordinates
+
         self.dpitch = 0
         self.droll = 0
         self.dyaw = 0
@@ -138,28 +139,24 @@ class Particle_filter(object):
             if self.particles[m].w != 0:
                 new_weight[m] = self.weight_change(m) #alterado
             #if m == 1:
-            #    print(new_pos, new_theta, new_weight[m])
+
             newPF.append(Particle(m, new_pos, new_weight[m], _theta = new_theta)) #alterado
         new_weight = self.normalize_weights(new_weight)
         eff_particles = self.det_eff_part(new_weight) #alterado
+        print('A particula 2 esta na posica x:',self.particles[2].pos[0],'e y:',self.particles[2].pos[1],'\n')
         #print(new_weight)
-        #print('EFfective particle:',eff_particles)
+        print('EFfective particle:',eff_particles)
         b_idx = np.argmax(new_weight)
         max_weight = max(new_weight)
-        print('The best estimate is given by x = ', self.particles[b_idx].pos[0]*self.map_resolution,' and y = ', self.particles[b_idx].pos[1]*self.map_resolution,' with weight = ', max_weight)
-        if eff_particles < (self.M)/2:
+        #print('The best estimate is given by x = ', self.particles[b_idx].pos[0]*self.map_resolution,' and y = ', self.particles[b_idx].pos[1]*self.map_resolution,' with weight = ', max_weight)
+        if eff_particles < 2*(self.M)/3:
             a, w_v = self.make_1D_vect(new_weight)
             w_v /= sum(w_v)
+            mx = np.random.choice(a, self.M, p=w_v)
             for m in range(self.M):
-                mx = int(np.random.choice(a, 1, p=w_v))
-                idx = mx/self.y
+                idx = mx[m]/self.y
                 idxf = int(mt.floor(idx))
-                idy = mx-idxf*self.y
-                while(self.map[idxf,idy] != 0):
-                    mx = int(np.random.choice(a, p=w_v))
-                    idx = mx/self.y
-                    idxf = int(mt.floor(idx))
-                    idy = mx-idxf*self.y
+                idy = int(mx[m]-idxf*self.y)
                 finPF.append(Particle(m,[idxf,idy],1, _theta = self.particles[m].theta))
             self.particles = finPF
 
@@ -214,10 +211,10 @@ class Particle_filter(object):
             return 0
 
     def weight_change(self, _m):
-        # self.i += 1
-        # if self.static == 0:
-        #     return self.particles[_m].w
-        # print(self.i)
+        self.i += 1
+        if self.static == 0:
+            return self.particles[_m].w
+        #print(self.i)
         wt = 0
         for i in range(self.angle_readings):
             if self.ranges_in_grid[0,i] != -1:
@@ -268,19 +265,17 @@ class Particle_filter(object):
             p_lastbaselink_currbaselink = R_map_lastbaselink.transpose().dot(p_map_currbaselink - p_map_lastbaselink)
 
             q_map_lastbaselink_euler = euler_from_quaternion(q_map_lastbaselink)
-            q_map_currbaselink_euler = euler_from_quaternion(q_map_currbaselink)
+            q_lastbaselink_currbaselink = tr.quaternion_multiply(tr.quaternion_inverse(q_map_lastbaselink), q_map_currbaselink)
 
-            # Does the difference in yaw
+            roll_diff, pitch_diff, yaw_diff = tr.euler_from_quaternion(q_lastbaselink_currbaselink)
 
-            yaw_diff = q_map_currbaselink_euler[2] - q_map_lastbaselink_euler[2]
-            roll_diff = q_map_currbaselink_euler[0] - q_map_lastbaselink_euler[0]
-            pitch_diff = q_map_currbaselink_euler[1] - q_map_lastbaselink_euler[1]
 
-            self.dpitch = abs(pitch_diff)
-            self.droll = abs(roll_diff)
+            self.droll += roll_diff
+            self.dpitch += pitch_diff
             self.dyaw += yaw_diff
             self.dx += p_lastbaselink_currbaselink[0]
             self.dy += p_lastbaselink_currbaselink[1]
+            #print('dif x',self.dx,'diif y',self.dy,'diff yaw',self.dyaw)
 
 
     def predict_next_odometry(self, m):
@@ -290,13 +285,14 @@ class Particle_filter(object):
         ntheta = random.gauss(0, self.dynamics_orientation_noise_std_dev)
 
         distance = mt.sqrt(self.dx**2 + self.dy**2)
-        #
-        # if(self.dpitch > 0.001 and self.droll > 0.001):
-        #     self.static = 0
-        #     #print(1)
-        # else:
-        #     self.static = 1
-        if( self.dx > 0.01 or self.dy > 0.01 or self.dyaw > 0.002):
+
+        if(self.dpitch > 0.001 or self.droll > 0.001):
+            self.static = 0
+            #print(1)
+        else:
+            self.static = 1
+
+        if( abs(self.dx) > 0.01 or abs(self.dy) > 0.01 or abs(self.dyaw) > 0.002):
             self.particles[m].pos[0] += self.dx + delta_x * self.dx
             self.particles[m].pos[1] += self.dy + delta_y * self.dy
             self.particles[m].theta += self.dyaw + ntheta * self.dyaw
@@ -308,7 +304,6 @@ class Particle_filter(object):
         if self.first_time == True:
             max_angle_sensor = msg.angle_max
             min_angle_sensor = msg.angle_min
-            print('max=',max_angle_sensor,'min=',min_angle_sensor)
             angle_inc_sensor = msg.angle_increment
             self.max_dist = msg.range_max
             self.min_dist = msg.range_min
@@ -334,7 +329,7 @@ class MCL(object):
 
         # Errors of associated devices
 
-        dynamics_translation_noise_std_dev   = 0.05
+        dynamics_translation_noise_std_dev   = 0.15
         dynamics_orientation_noise_std_dev   = 0.03
         beam_range_measurement_noise_std_dev = 0.3
 
@@ -354,8 +349,8 @@ class MCL(object):
         self.laser_points_marker_pub = rospy.Publisher('/typhoon/debug/laser_points', Marker, queue_size=1)
         self.particles_pub = rospy.Publisher('/typhoon/particle_filter/particles', MarkerArray, queue_size=1)
         # Subscribe to topics
-        rospy.Subscriber('/mavros/local_position/odom', Odometry, self.odom_callback)
-        rospy.Subscriber('/base_scan', LaserScan, self.scan_callback)
+        rospy.Subscriber('/ground_truth/state', Odometry, self.odom_callback)
+        rospy.Subscriber('/spur/laser/scan', LaserScan, self.scan_callback)
 
 
 
@@ -467,8 +462,7 @@ class MCL(object):
             self.pf.dx = 0
             self.pf.dy = 0
             self.pf.dyaw = 0
-            self.pf.dpitch = 0
-            self.pf.droll = 0
+
             rate.sleep()
 
 
