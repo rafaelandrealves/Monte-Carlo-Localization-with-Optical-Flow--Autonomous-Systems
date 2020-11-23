@@ -92,6 +92,7 @@ class Particle_filter(object):
             #     print('map=',self.map[422,384])
             # else:
             self.particles.append(Particle(m,[idx,idy],1)) # append particle to particle filter
+            print('Val random',self.particles[m].pos[0]*self.map_resolution)
             #print('map=',self.map[idxf,idy])
 
     def particle_update_weight(self, _pbmat, _newPF):
@@ -152,18 +153,28 @@ class Particle_filter(object):
         eff_particles = self.det_eff_part(new_weight)
         #print('A particula 2 esta na posica x:',self.particles[2].pos[0],'e y:',self.particles[2].pos[1],'\n')
         #print(new_weight)
-        print('EFfective particle:',eff_particles)
+        #print('EFfective particle:',eff_particles)
         b_idx = np.argmax(new_weight) #get best prediction index
         max_weight = max(new_weight) #get best prediction
         #print('The best estimate is given by x = ', self.particles[b_idx].pos[0]*self.map_resolution,' and y = ', self.particles[b_idx].pos[1]*self.map_resolution,' with weight = ', max_weight)
-        if eff_particles < (self.M)/2:
-            a, w_v = self.make_1D_vect(new_weight)
-            mx = np.random.choice(a, self.M, p=w_v)
-            for m in range(self.M):
-                idx = mx[m]/self.y
-                idxf = int(mt.floor(idx))
-                idy = int(mx[m]-idxf*self.y)
-                finPF.append(Particle(m,[idxf,idy],1, _theta = self.particles[m].theta))
+        if eff_particles < 2*(self.M)/3:
+            sample_u = np.random.uniform(0,1)
+            index = int(sample_u * (self.M - 1))
+            beta = 0.0
+            if new_weight == []:
+                new_weight = [1] * self.M
+            max_w = max(new_weight)
+            #print "max_w", max_w
+            #print "weight", self.weights
+            for particle in self.particles:
+                beta += np.random.uniform(0,1) * 2.0 * max_w
+                while beta > new_weight[index]:
+                    beta -= new_weight[index]
+                    index = (index + 1) % self.M
+
+                particle = self.particles[index]
+                #particle_indexes.append(particle.id)
+                finPF.append(Particle(particle,[particle.pos[0],particle.pos[1]],sample_u, _theta = self.particles[m].theta))
             self.particles = finPF
 
     def angle_vect_make(self, _max_angle, _min_angle, _angle_inc):
@@ -183,8 +194,8 @@ class Particle_filter(object):
         self.ranges_in_grid = np.zeros((2,self.angle_readings)) #create new ranges vector
         for i in range(self.angle_readings):
             if self.ranges[i] < self.max_dist and self.ranges[i] > self.min_dist: # in range
-                self.ranges_in_grid[0,i] = self.ranges[i]/self.map_resolution #convert from meters to grid
-                self.ranges_in_grid[1,i] = self.ranges[i]/self.map_resolution #convert from meters to grid
+                self.ranges_in_grid[0,i] = (self.ranges[i] + 10.575)/self.map_resolution #convert from meters to grid
+                self.ranges_in_grid[1,i] = (self.ranges[i] + 9.625)/self.map_resolution #convert from meters to grid
             else: # not valid
                 self.ranges_in_grid[0,i] = -1
                 self.ranges_in_grid[1,i] = -1
@@ -219,7 +230,7 @@ class Particle_filter(object):
     def weight_change(self, _m):
         if self.static == 0: #verify if it is moving
             return self.particles[_m].w
-        wt = self.particles[_m].w # temporary weight
+        wt = 0 # temporary weight
         for i in range(self.angle_readings): # for all laser readings
             if self.ranges_in_grid[0,i] != -1: # check if is valid
                 wt = wt + self.compare_dist(_m,i) # change weight
@@ -242,6 +253,7 @@ class Particle_filter(object):
         self.last_robot_odom = self.robot_odom
         self.robot_odom = msg
 
+        #print('x-',self.robot_odom.pose.pose.position.x)
         if self.last_robot_odom: #if its not the first time
 
             p_map_currbaselink = np.array([self.robot_odom.pose.pose.position.x,
@@ -264,26 +276,33 @@ class Particle_filter(object):
 
             # Save quaternion units, with axis of rotation
             # Does the rotation matrix
-            p_lastbaselink_currbaselink = p_map_currbaselink-p_map_lastbaselink
+            #p_lastbaselink_currbaselink = p_map_currbaselink-p_map_lastbaselink
             # R_map_lastbaselink = tr.quaternion_matrix(q_map_lastbaselink)[0:3,0:3]
             #
             # p_lastbaselink_currbaselink = R_map_lastbaselink.transpose().dot(p_map_currbaselink - p_map_lastbaselink)
 
+            R_map_lastbaselink = tr.quaternion_matrix(q_map_lastbaselink)[0:3,0:3]
+            p_lastbaselink_currbaselink = R_map_lastbaselink.transpose().dot(p_map_currbaselink - p_map_lastbaselink)
+            
             q_map_lastbaselink_euler = euler_from_quaternion(q_map_lastbaselink)
-            q_map_currbaselink_euler = euler_from_quaternion(q_map_currbaselink)
+            q_lastbaselink_currbaselink = tr.quaternion_multiply(tr.quaternion_inverse(q_map_lastbaselink), q_map_currbaselink)
+
+            roll_diff, pitch_diff, yaw_diff = tr.euler_from_quaternion(q_lastbaselink_currbaselink)
+
             # q_lastbaselink_currbaselink = tr.quaternion_multiply(tr.quaternion_inverse(q_map_lastbaselink), q_map_currbaselink)
             #
             # roll_diff, pitch_diff, yaw_diff = tr.euler_from_quaternion(q_lastbaselink_currbaselink)
-            roll_diff = q_map_currbaselink_euler[0] - q_map_lastbaselink_euler[0]
-            pitch_diff = q_map_currbaselink_euler[1] - q_map_lastbaselink_euler[1]
-            yaw_diff = q_map_currbaselink_euler[2] - q_map_lastbaselink_euler[2]
+            #roll_diff += q_map_currbaselink_euler[0] - q_map_lastbaselink_euler[0]
+            #pitch_diff = q_map_currbaselink_euler[1] - q_map_lastbaselink_euler[1]
+            #yaw_diff = q_map_currbaselink_euler[2] - q_map_lastbaselink_euler[2]
 
 
             self.droll = roll_diff
             self.dpitch = pitch_diff
-            self.dyaw += yaw_diff
-            self.dx += p_lastbaselink_currbaselink[0]
-            self.dy += p_lastbaselink_currbaselink[1]
+            self.dyaw = yaw_diff
+            self.dx = p_lastbaselink_currbaselink[0]
+            self.dy = p_lastbaselink_currbaselink[1]
+
             #print('dif x',self.dx,'diif y',self.dy,'diff yaw',self.dyaw)
 
 
@@ -294,20 +313,26 @@ class Particle_filter(object):
         ntheta = random.gauss(0, self.dynamics_orientation_noise_std_dev) #create gauss
 
         # distance = mt.sqrt(self.dx**2 + self.dy**2)
-
+        v = mt.sqrt(self.dx**2 + self.dy**2)
         if(abs(self.dpitch) > 0.005 or abs(self.droll) > 0.005): # check if is moving
             self.static = 0
         else:
             self.static = 1
+        
 
-        if abs(self.dx) > 0.1: #check if was moving
-            self.particles[m].pos[0] += (self.dx + delta_x)/self.map_resolution  # * (self.dx)/self.map_resolution
-        if abs(self.dy) > 0.1:
-            self.particles[m].pos[1] += (self.dy + delta_y)/self.map_resolution  # * (self.dy)/self.map_resolution
+        #print('Var do x-',self.particles[m].pos[0]*self.map_resolution,'dx -', self.dx,'Guass',delta_x)
+
+        if abs(self.dx) > 0.05: #check if was moving
+            self.particles[m].pos[0] += (self.dx + delta_x )/self.map_resolution  # * (self.dx)/self.map_resolution
+        if abs(self.dy) > 0.05:
+            self.particles[m].pos[1] += (self.dy + delta_y)/self.map_resolution  # * (self.dy)/self.map_resolution # * (self.dy)/self.map_resolution
         if abs(self.dyaw) > 0.01:
             self.particles[m].theta += self.dyaw + ntheta #* self.dyaw
         #print('The particle',m,'is in (',self.particles[m].pos[0],',',self.particles[m].pos[1],')')
-        self.odometry_correct(m) # check if particle is in map
+        #self.odometry_correct(m) # check if particle is in map
+
+        #print('NOVO Var do x-',self.particles[m].pos[0]*self.map_resolution)
+
         return [[self.particles[m].pos[0],self.particles[m].pos[1]],self.particles[m].theta]
 
     def scan_analysis(self, msg):
@@ -339,7 +364,7 @@ class MCL(object):
 
         # Errors of associated devices
 
-        dynamics_translation_noise_std_dev   = 0.15
+        dynamics_translation_noise_std_dev   = 0.015
         dynamics_orientation_noise_std_dev   = 0.03
         beam_range_measurement_noise_std_dev = 0.3
 
@@ -359,14 +384,12 @@ class MCL(object):
         self.gt_x = 0
         self.gt_y = 0
 
-        #self.laser_points_marker_pub = rospy.Publisher('/typhoon/debug/laser_points', Marker, queue_size=1)
-        self.particles_pub = rospy.Publisher('/typhoon/particle_filter/particles', MarkerArray, queue_size=1)
-        # self.gt_pub = rospy.Publisher('/typhoon/particle_filter/ground_truth', Marker, queue_size=1)
-        # Subscribe to topics
-        rospy.Subscriber('/mavros/local_position/odom', Odometry, self.odom_callback) #/ground_truth/state
-        # rospy.Subscriber('/ground_truth/state', Odometry, self.gt_processing) #/ground_truth/state
-        rospy.Subscriber('/spur/laser/scan', LaserScan, self.scan_callback)
 
+        self.laser_points_marker_pub = rospy.Publisher('/typhoon/debug/laser_points', Marker, queue_size=1)
+        self.particles_pub = rospy.Publisher('/typhoon/particle_filter/particles', MarkerArray, queue_size=1)
+        # Subscribe to topics
+        rospy.Subscriber('/mavros/local_position/odom', Odometry, self.odom_callback)
+        rospy.Subscriber('/base_scan', LaserScan, self.scan_callback)
 
 
     def scan_callback(self,msg):
@@ -480,8 +503,8 @@ class MCL(object):
 
         #print('This is Particle x-',particle.pos[0],'This is Particle y-',particle.pos[1])
 
-        gx = particle.pos[0] * self.pf.map_resolution - 10
-        gy = particle.pos[1] * self.pf.map_resolution - 10
+        gx = particle.pos[0] * self.pf.map_resolution - 10.575
+        gy = particle.pos[1] * self.pf.map_resolution - 9.625
         quat = Quaternion(*quaternion_from_euler(0,0,particle.theta))
         msg.points.append(Point(gx, gy,0))
         msg.points.append(Point(gx + self.pf.map_resolution*vx, gy + self.pf.map_resolution*vy, 0))
