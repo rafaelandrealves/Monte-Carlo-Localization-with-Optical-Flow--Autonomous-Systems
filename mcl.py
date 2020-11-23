@@ -72,7 +72,6 @@ class Particle_filter(object):
         self.static = 1
 
     def Particle_init(self):
-        i = 0
         for m in range(self.M):
             while self.x == 0: #while map not received
                 rospy.sleep(1)
@@ -91,8 +90,25 @@ class Particle_filter(object):
             #     self.particles.append(Particle(m,[422,384],1))
             #     print('map=',self.map[422,384])
             # else:
-            self.particles.append(Particle(m,[idx,idy],1)) # append particle to particle filter
+            self.particles.append(Particle(m,[idxf,idy],1)) # append particle to particle filter
             #print('map=',self.map[idxf,idy])
+
+    def Init_one_particle(self, _m):
+        lin_pb = np.random.uniform(0,1,(self.x,self.y)) #create uniform distribution matrix with map size
+        mx = np.argmax(lin_pb) #max probability from matrix
+        idx = mx/self.y #index x from the max
+        idxf = int(mt.floor(idx)) # index x normalized
+        idy = mx-idxf*self.y #index y from the max
+        while(self.map[idxf,idy] != 0): # search for valid position
+            lin_pb[idxf,idy] = 0
+            mx = np.argmax(lin_pb)
+            idx = mx/self.y
+            idxf = int(mt.floor(idx))
+            idy = mx-idxf*self.y
+        self.particles[_m].pos[0] = idxf
+        self.particles[_m].pos[1] = idy
+        self.particles[_m].w = 1
+        self.particles[_m].theta = 0
 
     def particle_update_weight(self, _pbmat, _newPF):
         newmat = np.zeros((_pbmat.shape[0],_pbmat.shape[1]))
@@ -146,7 +162,6 @@ class Particle_filter(object):
                 new_weight[m] = 0
                 self.particles[m].w = new_weight[m] # assign to particle
             #if m == 1:
-
             newPF.append(Particle(m, new_pos, new_weight[m], _theta = new_theta)) #create new PF
         new_weight = self.normalize_weights(new_weight)
         eff_particles = self.det_eff_part(new_weight)
@@ -157,13 +172,18 @@ class Particle_filter(object):
         max_weight = max(new_weight) #get best prediction
         #print('The best estimate is given by x = ', self.particles[b_idx].pos[0]*self.map_resolution,' and y = ', self.particles[b_idx].pos[1]*self.map_resolution,' with weight = ', max_weight)
         if eff_particles < (self.M)/2:
-            a, w_v = self.make_1D_vect(new_weight)
-            mx = np.random.choice(a, self.M, p=w_v)
+            w_v = np.array(new_weight)
+            w_v = w_v*self.M
             for m in range(self.M):
-                idx = mx[m]/self.y
-                idxf = int(mt.floor(idx))
-                idy = int(mx[m]-idxf*self.y)
-                finPF.append(Particle(m,[idxf,idy],1, _theta = self.particles[m].theta))
+                if(max(w_v)<1):
+                    mx = np.argmax(w_v)
+                    w_v[mx] = 0
+                else:
+                    mx = np.argmax(w_v) #max probability from matrix
+                    w_v[mx] = w_v[mx] - 1
+                idx = self.particles[mx].pos[0]
+                idy = self.particles[mx].pos[1]
+                finPF.append(Particle(m,[idx,idy],1, _theta = self.particles[m].theta))
             self.particles = finPF
 
     def angle_vect_make(self, _max_angle, _min_angle, _angle_inc):
@@ -219,7 +239,7 @@ class Particle_filter(object):
     def weight_change(self, _m):
         if self.static == 0: #verify if it is moving
             return self.particles[_m].w
-        wt = self.particles[_m].w # temporary weight
+        wt = 0 # temporary weight
         for i in range(self.angle_readings): # for all laser readings
             if self.ranges_in_grid[0,i] != -1: # check if is valid
                 wt = wt + self.compare_dist(_m,i) # change weight
@@ -229,10 +249,10 @@ class Particle_filter(object):
         xx = int(self.particles[_m].pos[0]) # pos x from particle
         yy = int(self.particles[_m].pos[1]) # pos y from particle
         if xx >= self.x or xx < 0 or yy >= self.y or yy < 0: #check if it is outside map
-            self.particles[_m].w = 0
+            self.Init_one_particle(_m)
             return
         if self.map[xx,yy] != 0: #check if it is in available place
-            self.particles[_m].w = 0
+            self.Init_one_particle(_m)
 
     def odom_processing(self,msg):
         #Save robot Odometry
@@ -274,8 +294,8 @@ class Particle_filter(object):
             # q_lastbaselink_currbaselink = tr.quaternion_multiply(tr.quaternion_inverse(q_map_lastbaselink), q_map_currbaselink)
             #
             # roll_diff, pitch_diff, yaw_diff = tr.euler_from_quaternion(q_lastbaselink_currbaselink)
-            roll_diff = q_map_currbaselink_euler[0] - q_map_lastbaselink_euler[0]
-            pitch_diff = q_map_currbaselink_euler[1] - q_map_lastbaselink_euler[1]
+            roll_diff = q_map_currbaselink_euler[0]
+            pitch_diff = q_map_currbaselink_euler[1]
             yaw_diff = q_map_currbaselink_euler[2] - q_map_lastbaselink_euler[2]
 
 
@@ -300,9 +320,9 @@ class Particle_filter(object):
         else:
             self.static = 1
 
-        if abs(self.dx) > 0.1: #check if was moving
+        if (abs(self.dx) > 0.1 and abs(self.dyaw) < 0.001): #check if was moving
             self.particles[m].pos[0] += (self.dx + delta_x)/self.map_resolution  # * (self.dx)/self.map_resolution
-        if abs(self.dy) > 0.1:
+        if (abs(self.dy) > 0.1 and abs(self.dyaw) < 0.001):
             self.particles[m].pos[1] += (self.dy + delta_y)/self.map_resolution  # * (self.dy)/self.map_resolution
         if abs(self.dyaw) > 0.01:
             self.particles[m].theta += self.dyaw + ntheta #* self.dyaw
