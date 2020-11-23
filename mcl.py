@@ -301,7 +301,7 @@ class Particle_filter(object):
             self.dpitch = pitch_diff
             self.dyaw = yaw_diff
             self.dx = p_lastbaselink_currbaselink[0]
-            self.dy = p_lastbaselink_currbaselink[1]
+            self.dy = p_lastbaselink_currbaselink[1] #x e y podem estar trocados aqui
 
             #print('dif x',self.dx,'diif y',self.dy,'diff yaw',self.dyaw)
 
