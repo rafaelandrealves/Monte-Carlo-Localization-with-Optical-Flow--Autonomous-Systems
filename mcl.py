@@ -158,7 +158,7 @@ class Particle_filter(object):
         max_weight = max(new_weight) #get best prediction
         #print('The best estimate is given by x = ', self.particles[b_idx].pos[0]*self.map_resolution,' and y = ', self.particles[b_idx].pos[1]*self.map_resolution,' with weight = ', max_weight)
         if eff_particles < 2*(self.M)/3:
-            sample_u = np.random.uniform(0,1)
+            sample_u = np.random.uniform(0,1) #fazer cheating M*w_v e distribuir
             index = int(sample_u * (self.M - 1))
             beta = 0.0
             if new_weight == []:
