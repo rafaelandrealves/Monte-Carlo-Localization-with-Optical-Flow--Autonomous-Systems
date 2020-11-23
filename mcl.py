@@ -91,8 +91,8 @@ class Particle_filter(object):
             #     self.particles.append(Particle(m,[422,384],1))
             #     print('map=',self.map[422,384])
             # else:
-            self.particles.append(Particle(m,[idx,idy],1)) # append particle to particle filter
-            print('Val random',self.particles[m].pos[0]*self.map_resolution)
+            self.particles.append(Particle(m,[idxf,idy],1)) # append particle to particle filter
+            #print('Val random',self.particles[m].pos[0]*self.map_resolution)
             #print('map=',self.map[idxf,idy])
 
     def particle_update_weight(self, _pbmat, _newPF):
@@ -153,12 +153,12 @@ class Particle_filter(object):
         eff_particles = self.det_eff_part(new_weight)
         #print('A particula 2 esta na posica x:',self.particles[2].pos[0],'e y:',self.particles[2].pos[1],'\n')
         #print(new_weight)
-        #print('EFfective particle:',eff_particles)
+        print('EFfective particle:',eff_particles)
         b_idx = np.argmax(new_weight) #get best prediction index
         max_weight = max(new_weight) #get best prediction
         #print('The best estimate is given by x = ', self.particles[b_idx].pos[0]*self.map_resolution,' and y = ', self.particles[b_idx].pos[1]*self.map_resolution,' with weight = ', max_weight)
         if eff_particles < 2*(self.M)/3:
-            sample_u = np.random.uniform(0,1) #fazer cheating M*w_v e distribuir
+            sample_u = np.random.uniform(0,1)
             index = int(sample_u * (self.M - 1))
             beta = 0.0
             if new_weight == []:
@@ -194,8 +194,8 @@ class Particle_filter(object):
         self.ranges_in_grid = np.zeros((2,self.angle_readings)) #create new ranges vector
         for i in range(self.angle_readings):
             if self.ranges[i] < self.max_dist and self.ranges[i] > self.min_dist: # in range
-                self.ranges_in_grid[0,i] = (self.ranges[i] + 10.575)/self.map_resolution #convert from meters to grid
-                self.ranges_in_grid[1,i] = (self.ranges[i] + 9.625)/self.map_resolution #convert from meters to grid
+                self.ranges_in_grid[0,i] = (self.ranges[i] )/self.map_resolution #convert from meters to grid
+                self.ranges_in_grid[1,i] = (self.ranges[i] )/self.map_resolution #convert from meters to grid
             else: # not valid
                 self.ranges_in_grid[0,i] = -1
                 self.ranges_in_grid[1,i] = -1
@@ -297,11 +297,11 @@ class Particle_filter(object):
             #yaw_diff = q_map_currbaselink_euler[2] - q_map_lastbaselink_euler[2]
 
 
-            self.droll = roll_diff
-            self.dpitch = pitch_diff
-            self.dyaw = yaw_diff
-            self.dx = p_lastbaselink_currbaselink[0]
-            self.dy = p_lastbaselink_currbaselink[1] #x e y podem estar trocados aqui
+            self.droll += roll_diff
+            self.dpitch += pitch_diff
+            self.dyaw += yaw_diff
+            self.dx += p_lastbaselink_currbaselink[0]
+            self.dy += p_lastbaselink_currbaselink[1]
 
             #print('dif x',self.dx,'diif y',self.dy,'diff yaw',self.dyaw)
 
