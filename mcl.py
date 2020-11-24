@@ -315,15 +315,21 @@ class Particle_filter(object):
 
         # distance = mt.sqrt(self.dx**2 + self.dy**2)
 
-        if(abs(self.dpitch) > 0.005 or abs(self.droll) > 0.005): # check if is moving
+        if(abs(self.dpitch) > 0.5 or abs(self.droll) > 0.5): # check if is moving
             self.static = 0
         else:
             self.static = 1
 
         if (abs(self.dx) > 0.1 and abs(self.dyaw) < 0.001): #check if was moving
             self.particles[m].pos[0] += (self.dx + delta_x)/self.map_resolution  # * (self.dx)/self.map_resolution
+            self.static = 0
+        else:
+            self.static = 1
         if (abs(self.dy) > 0.1 and abs(self.dyaw) < 0.001):
             self.particles[m].pos[1] += (self.dy + delta_y)/self.map_resolution  # * (self.dy)/self.map_resolution
+            self.static = 0
+        else:
+            self.static = 1
         if abs(self.dyaw) > 0.01:
             self.particles[m].theta += self.dyaw + ntheta #* self.dyaw
         #print('The particle',m,'is in (',self.particles[m].pos[0],',',self.particles[m].pos[1],')')
