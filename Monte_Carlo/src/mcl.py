@@ -152,6 +152,7 @@ class Particle_filter(object):
         finPF = [] # X
         new_weight = np.zeros(self.M) #new vector for weight change
         #rospy.sleep(10)
+        error = 0
         self.m_to_grid() # convert from meters to grid coordinates
         for m in range(self.M):
             [new_pos,new_theta] = self.predict_next_odometry(m) #predict odom
