@@ -157,6 +157,7 @@ class Particle_filter(object):
             [new_pos,new_theta] = self.predict_next_odometry(m) #predict odom
             new_weight[m] = self.weight_change(m) # predict weight
             self.particles[m].w = new_weight[m] # assign to particle
+            error += mt.sqrt((self.robot_odom.pose.pose.position.x - (self.particles[m].pos[0]*self.map_resolution))**2 + (self.robot_odom.pose.pose.position.y - (self.particles[m].pos[1] * self.map_resolution))**2)
             #if m == 1:
             newPF.append(Particle(m, new_pos, new_weight[m], _theta = new_theta)) #create new PF
         new_weight = self.normalize_weights(new_weight)
@@ -164,6 +165,8 @@ class Particle_filter(object):
         #print('A particula 2 esta na posica x:',self.particles[2].pos[0],'e y:',self.particles[2].pos[1],'\n')
         #print(new_weight)
         #print('EFfective particle:',eff_particles)
+        print('SSE', (error/self.M ))
+
         b_idx = np.argmax(new_weight) #get best prediction index
         max_weight = max(new_weight) #get best prediction
         #print('The best estimate is given by x = ', self.particles[b_idx].pos[0]*self.map_resolution,' and y = ', self.particles[b_idx].pos[1]*self.map_resolution,' with weight = ', max_weight)
