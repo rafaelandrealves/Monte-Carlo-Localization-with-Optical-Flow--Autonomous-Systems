@@ -69,6 +69,9 @@ class Particle_filter(object):
         self.dyaw = 0
         self.dx = 0
         self.dy = 0
+        self.max_angle_sensor = 0	#AQUI
+        self.min_angle_sensor = 0	#AQUI
+        self.angle_inc_sensor = 0   #AQUI
 
         #
         self.ground_truth_x = 0
@@ -247,22 +250,33 @@ class Particle_filter(object):
         return subsample_range, subsample_angle
 
     def compare_dist(self, _m, _i):
-        ang_dist_x = mt.cos(self.angle_vector[_i]+self.particles[_m].theta)*self.ranges_in_grid[0,_i] #
-        ang_dist_y = mt.sin(self.angle_vector[_i]+self.particles[_m].theta)*self.ranges_in_grid[1,_i] #trigonometry
-        xx = int(mt.floor(ang_dist_x))
-        yy = int(mt.floor(ang_dist_y))
+        #ang_dist_x = mt.cos(self.angle_vector[_i]+self.particles[_m].theta)*self.ranges_in_grid[0,_i] #
+        #ang_dist_y = mt.sin(self.angle_vector[_i]+self.particles[_m].theta)*self.ranges_in_grid[1,_i] #trigonometry
+        xx = int(mt.floor(self.max_dist))
+        yy = int(mt.floor(self.max_dist))
         xi = int(self.particles[_m].pos[0])
         yi = int(self.particles[_m].pos[1])
-        xw = xi+xx
-        yw = yi+yy
-        wa = 0
-        for i in range(-1,2):
-            if(xw+i >= 0 and xw+i < self.x and yw+i >= 0 and yw+i < self.y):
-                wa = wa + self.map[xw+i,yw+i]
-        if wa > 0:
-            return 1
-        else:
-            return 0
+		distances = -1 * np.ones([self.angle_readings])
+		for i in range(xi-xx, xi+xx+1):
+			for j in range(yi-yy, yi+yy+1):
+				if( ((i-xi)^2 + (j-yi)^2) < xx^2):
+					if(i >= 0 and i < self.x and j >= 0 and j < self.y):
+						if( self.map[i,j] == 100):
+							dist = mt.sqrt((i-xi)^2 + (j-yi)^2)
+							if( i-yi > 0):
+								ang =  mt.atan((j-yi)/(i-xi))
+							else:
+								ang =  mt.atan((j-yi)/(i-xi)) + mt.pi
+							if( ang > self.max_angle_sensor):
+								ang = ang - (self.max_angle_sensor-self.min_angle_sensor)
+							else if(ang < self.min_angle_sensor):
+								ang = ang + (self.max_angle_sensor-self.min_angle_sensor)
+							ang_pos = int(ang//self.angle_increment)
+							if( distances[ang_pos] == -1):
+								distances[ang_pos] = dist
+							else if( distances[ang_pos] > dist):
+								distances[ang_pos] = dist
+        return distances
 
     def weight_change(self, _m):
         wt = 1 # temporary weight
@@ -357,9 +371,9 @@ class Particle_filter(object):
 
     def scan_analysis(self, msg):
         if self.first_time == True: # only the first time
-            max_angle_sensor = msg.angle_max
-            min_angle_sensor = msg.angle_min
-            angle_inc_sensor = msg.angle_increment
+            self.max_angle_sensor = msg.angle_max	#AQUI
+            self.min_angle_sensor = msg.angle_min	#AQUI
+            self.angle_inc_sensor = msg.angle_increment #AQUI
             self.max_dist = msg.range_max
             self.angle_vect_make(max_angle_sensor, min_angle_sensor, angle_inc_sensor) # create angle vector
             self.first_time = False
