@@ -137,6 +137,8 @@ class Particle_filter(object):
 
 
     def get_ground_truth(self, msg):
+        while self.map_resolution == 0: #while map not received
+                rospy.sleep(1)
         p_map_currbaselink = np.array([msg.pose.pose.position.x,
                                        msg.pose.pose.position.y,
                                        msg.pose.pose.position.z])
@@ -196,8 +198,8 @@ class Particle_filter(object):
         eff_particles = self.det_eff_part(new_weight)
         #print('A particula 2 esta na posica x:',self.particles[2].pos[0],'e y:',self.particles[2].pos[1],'\n')
         #print(new_weight)
-        #print('EFfective particle:',eff_particles)
-        print('MSE', (error/self.M ))
+        print('EFfective particle:',eff_particles)
+        #print('MSE', (error/self.M ))
 
         b_idx = np.argmax(new_weight) #get best prediction index
         max_weight = max(new_weight) #get best prediction
@@ -249,41 +251,60 @@ class Particle_filter(object):
                 subsample_range.append(self.ranges[i])
         return subsample_range, subsample_angle
 
-    def compare_dist(self, _m, _i):
+    def compare_dist(self, _m):
         #ang_dist_x = mt.cos(self.angle_vector[_i]+self.particles[_m].theta)*self.ranges_in_grid[0,_i] #
         #ang_dist_y = mt.sin(self.angle_vector[_i]+self.particles[_m].theta)*self.ranges_in_grid[1,_i] #trigonometry
         xx = int(mt.floor(self.max_dist))
         yy = int(mt.floor(self.max_dist))
         xi = int(self.particles[_m].pos[0])
         yi = int(self.particles[_m].pos[1])
-		distances = -1 * np.ones([self.angle_readings])
-		for i in range(xi-xx, xi+xx+1):
-			for j in range(yi-yy, yi+yy+1):
-				if( ((i-xi)^2 + (j-yi)^2) < xx^2):
-					if(i >= 0 and i < self.x and j >= 0 and j < self.y):
-						if( self.map[i,j] == 100):
-							dist = mt.sqrt((i-xi)^2 + (j-yi)^2)
-							if( i-yi > 0):
-								ang =  mt.atan((j-yi)/(i-xi))
-							else:
-								ang =  mt.atan((j-yi)/(i-xi)) + mt.pi
-							if( ang > self.max_angle_sensor):
-								ang = ang - (self.max_angle_sensor-self.min_angle_sensor)
-							else if(ang < self.min_angle_sensor):
-								ang = ang + (self.max_angle_sensor-self.min_angle_sensor)
-							ang_pos = int(ang//self.angle_increment)
-							if( distances[ang_pos] == -1):
-								distances[ang_pos] = dist
-							else if( distances[ang_pos] > dist):
-								distances[ang_pos] = dist
+        distances = -1 * np.ones([self.angle_readings])
+        for i in range(xi-xx, xi+xx+1):
+            for j in range(yi-yy, yi+yy+1):
+                if( ((i-xi)^2 + (j-yi)^2) < xx^2):
+                    if(i >= 0 and i < self.x and j >= 0 and j < self.y):
+                        if( self.map[i,j] == 100):
+                            dist = mt.sqrt((i-xi)**2 + (j-yi)**2)
+                            if(i-xi != 0):
+                                if( j-yi > 0):
+                                    ang =  mt.atan((j-yi)/(i-xi)) 
+                                elif(j-yi < 0):
+                                    ang =  mt.atan((j-yi)/(i-xi)) + mt.pi
+                                else:
+                                    if( i-xi > 0):
+                                        ang = 0 
+                                    else:
+                                        ang = -mt.pi
+                            else:
+                                if( j-yi > 0):
+                                    ang = mt.pi/2 
+                                else:
+                                    ang = -mt.pi/2
+                            if( ang > self.max_angle_sensor):
+                                ang = ang - (self.max_angle_sensor-self.min_angle_sensor)
+                            elif(ang < self.min_angle_sensor):
+                                ang = ang + (self.max_angle_sensor-self.min_angle_sensor)
+                            ang_pos = int(ang//self.angle_inc_sensor)
+                            if( distances[ang_pos] == -1):
+                                distances[ang_pos] = dist
+                            elif( distances[ang_pos] > dist):
+                                distances[ang_pos] = dist
         return distances
 
     def weight_change(self, _m):
-        wt = 1 # temporary weight
-        for i in range(self.angle_readings): # for all laser readings
-            if self.ranges_in_grid[0,i] != -1: # check if is valid
-                wt = wt + self.compare_dist(_m,i) # change weight
-        return wt
+      actual_readings = self.ranges_in_grid
+      expected_readings = self.compare_dist(_m)
+      print(sum(expected_readings))
+      rospy.sleep(10)
+      dif = 0
+      for i in range(self.angle_readings):
+          dif += ((expected_readings[i]*self.map_resolution) - (actual_readings[1,i]*self.map_resolution))
+          #print('DIF-',dif)
+      #exponetial_part = mt.exp(-0.5 * ((dif/self.beam_range_measurement_noise_std_dev)**2))
+      prob_normal_array = (1/(np.sqrt(2*np.pi*self.beam_range_measurement_noise_std_dev)) * np.exp((-1 / (2 * self.beam_range_measurement_noise_std_dev
+      )) * ((dif/self.angle_readings)**2)))
+      #print('The weigth is:',prob_normal_array)
+      return prob_normal_array
 
     def odometry_correct(self, _m):
         xx = int(self.particles[_m].pos[0]) # pos x from particle
@@ -375,7 +396,7 @@ class Particle_filter(object):
             self.min_angle_sensor = msg.angle_min	#AQUI
             self.angle_inc_sensor = msg.angle_increment #AQUI
             self.max_dist = msg.range_max
-            self.angle_vect_make(max_angle_sensor, min_angle_sensor, angle_inc_sensor) # create angle vector
+            self.angle_vect_make(self.max_angle_sensor, self.min_angle_sensor, self.angle_inc_sensor) # create angle vector
             self.first_time = False
         self.ranges_temp = msg.ranges # save ranges
 
@@ -413,7 +434,7 @@ class MCL(object):
         self.map_sub = rospy.Subscriber('/map', OccupancyGrid, self.map_callback)
         self.gt_sub = rospy.Subscriber('/ground_truth/state', Odometry, self.gt_callback) #/ground_truth/state
         self.pf.Particle_init()
-        self.pf.Initar_init()
+        #self.pf.Initar_init()
         self.gt_yaw = 0
         self.gt_x = 0
         self.gt_y = 0
