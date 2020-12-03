@@ -285,7 +285,7 @@ class Particle_filter(object):
       yi = int(self.particles[_m].pos[1])
       distances = []
       distance_stp = 1
-      dif = []
+      dif = 0
 
       for i in range(len(ang_vec)):
         ang = ang_vec[i]
@@ -306,22 +306,23 @@ class Particle_filter(object):
 
             r += distance_stp
 
-        distances.append(r*self.map_resolution)
-        dif.append( ((distances[i]*self.map_resolution) - (actual_readings[i]*self.map_resolution)))
+        distances.append(r)
+        #dif.append( ((actual_readings[i]*self.map_resolution) - (distances[i]*self.map_resolution)))
 
-      #for i in range(len(ang_vec)):
-      #   dif = ((expected_readings[i]*self.map_resolution) - (actual_readings[i]*self.map_resolution))
-          #print('DIF-',dif)
+      for i in range(len(ang_vec)):
+         print('actual',actual_readings[i],'vs Expected',distances[i])
+         dif += ((actual_readings[i]*self.map_resolution) - (distances[i]*self.map_resolution))
+         #print('DIF-',dif)
       #diff = [actual_range - predict_range for actual_range, predict_range in zip(actual_ranges, predict_ranges)]
       #exponetial_part = mt.exp(-0.5 * ((dif/self.beam_range_measurement_noise_std_dev)**2))
-      norm_error = (np.linalg.norm(dif)) ** 2
+      #norm_error = (np.linalg.norm(dif)) ** 2
       #print('norm_error-',norm_error)
       #prob_normal_array = (1/(np.sqrt(2*np.pi*self.beam_range_measurement_noise_std_dev)) * np.exp((-1 / (2 * self.beam_range_measurement_noise_std_dev
       #)) * ((dif)**2)))
 
       #w = """(1/(np.sqrt(2*np.pi*self.beam_range_measurement_noise_std_dev))) *""" np.exp(-0.5*(1/self.beam_range_measurement_noise_std_dev)*norm_error)
-      w = np.exp(-norm_error)
-      w = self.sigmoid(norm_error)
+      w = np.exp(-(dif/len(ang_vec)) ** 2)
+      #w = self.sigmoid(norm_error)
 
       #print('The weigth is:',w)
       return w
