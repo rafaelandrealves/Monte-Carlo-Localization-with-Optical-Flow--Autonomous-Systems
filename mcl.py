@@ -3,6 +3,7 @@
 import numpy as np
 import math as mt
 import rospy
+import operator
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid, MapMetaData, Odometry
 from geometry_msgs.msg import Twist, PoseStamped, Point, Pose, Quaternion, PoseArray
@@ -35,6 +36,8 @@ class Particle_filter(object):
         self.map = []
         self.x = 0
         self.y = 0
+        self.origin_x = 0
+        self.origin_y = 0
         self.min_dist = _distance_range[0]
         self.max_dist = _distance_range[1]
         self.min_ang = _angle_range[0]
@@ -74,11 +77,22 @@ class Particle_filter(object):
         self.ground_truth_x_now = 0
         self.ground_truth_y_now = 0
         self.ground_truth_yaw_now = 0
+        self.x_p = 0
+        self.y_p = 0
+        self.theta_p = 0
 
         #
         self.ground_truth_x = 0
         self.ground_truth_y = 0
         self.ground_truth_yaw = 0
+
+
+        self.error_file_position = []
+        self.error_file_orientation = []
+        self.occupancy_file = []
+        self.particle_pos_file = []
+        self.ground_truth_file = []
+        self.prediction_file = []
 
 
     def Particle_init(self):
@@ -148,8 +162,8 @@ class Particle_filter(object):
                                        msg.pose.pose.orientation.z,
                                        msg.pose.pose.orientation.w])
 
-        self.ground_truth_x = (p_map_currbaselink[0] + 10)/self.map_resolution
-        self.ground_truth_y = (p_map_currbaselink[1] + 10)/self.map_resolution
+        self.ground_truth_x = (p_map_currbaselink[0] - self.origin_x)/self.map_resolution
+        self.ground_truth_y = (p_map_currbaselink[1] - self.origin_y)/self.map_resolution
         q_map_currbaselink_euler = euler_from_quaternion(q_map_currbaselink)
         self.ground_truth_yaw = q_map_currbaselink_euler[2]
 
@@ -176,6 +190,35 @@ class Particle_filter(object):
                 w_vect[mx] += _w[m]
         return id_vect, w_vect
 
+    def Pos_predict(self, _w_v, _ef_part):
+        i = 0
+        temp_weight = _w_v
+        x_pred = 0
+        y_pred = 0
+        theta_pred = 0
+        d = {k:v for k, v in enumerate(temp_weight)}
+        sorted_d = sorted(d.items(), key=operator.itemgetter(1), reverse=True)
+        id = [k[0] for k in sorted_d][:10]
+        while i < 10:
+            #id = np.argmax(temp_weight)
+            x_pred += self.particles[id[i]].pos[0]
+            y_pred += self.particles[id[i]].pos[1]
+            theta_pred += self.particles[id[i]].theta
+            #temp_weight[id] = 0
+            i+=1
+        x_pred = x_pred / int(10)
+        y_pred = y_pred / int(10)
+        theta_pred = theta_pred / int(10)
+        return x_pred, y_pred, theta_pred
+
+    def error_calc(self):
+        print('prediction',self.x_p,' ', self.y_p, ' ', self.theta_p)
+        print('\nreality',self.ground_truth_x_now,' ', self.ground_truth_y_now, ' ', self.ground_truth_yaw_now)
+        error_pos = mt.sqrt(((self.x_p-self.ground_truth_x_now)*self.map_resolution)**2 +
+                        ((self.y_p-self.ground_truth_y_now)*self.map_resolution)**2)
+        error_ori = self.theta_p-self.ground_truth_yaw_now
+        return error_pos, error_ori
+
     def Resample_particles(self):
         while self.max_dist == 0: #while not started
             rospy.sleep(1)
@@ -189,6 +232,7 @@ class Particle_filter(object):
         self.ground_truth_x_now = self.ground_truth_x
         self.ground_truth_y_now = self.ground_truth_y
         self.ground_truth_yaw_now = self.ground_truth_yaw
+        self.ground_truth_file.write(repr(self.ground_truth_x_now)+ ' ' +repr(self.ground_truth_y_now)+ ' ' +repr(self.ground_truth_yaw_now)+'\n')
         newPF = [] # X~
         finPF = [] # X
         new_weight = np.zeros(self.M) #new vector for weight change
@@ -199,17 +243,22 @@ class Particle_filter(object):
             [new_pos,new_theta] = self.predict_next_odometry(m) #predict odom
             new_weight[m] = self.weight_change(m) # predict weight
             self.particles[m].w = new_weight[m] # assign to particle
-            error += (((self.ground_truth_x_now*self.map_resolution) - (self.particles[m].pos[0]*self.map_resolution))**2 +
-                 ((self.ground_truth_y_now*self.map_resolution) - (self.particles[m].pos[1] * self.map_resolution))**2)
+            #error += (((self.ground_truth_x_now*self.map_resolution) - (self.particles[m].pos[0]*self.map_resolution))**2 +
+            #     ((self.ground_truth_y_now*self.map_resolution) - (self.particles[m].pos[1] * self.map_resolution))**2)
             #if m == 1:
             newPF.append(Particle(m, new_pos, new_weight[m], _theta = new_theta)) #create new PF
         new_weight = self.normalize_weights(new_weight)
         eff_particles = self.det_eff_part(new_weight)
+        self.x_p, self.y_p, self.theta_p = self.Pos_predict( new_weight, eff_particles)
+        self.prediction_file.write(repr(self.x_p)+ ' ' +repr(self.y_p)+ ' ' +repr(self.theta_p)+'\n')
         #print('A particula 2 esta na posica x:',self.particles[2].pos[0],'e y:',self.particles[2].pos[1],'\n')
         #print(new_weight)
         #print('EFfective particle:',eff_particles)
-        print('Error', (mt.sqrt(error)/self.M ))
-
+        #print('Error', (mt.sqrt(error)/self.M ))
+        error_position, error_orientation = self.error_calc()
+        self.error_file_position.write(repr(error_position)+'\n')
+        self.error_file_orientation.write(repr(error_orientation)+'\n')
+        print('Error', error_position,error_orientation)
         b_idx = np.argmax(new_weight) #get best prediction index
         max_weight = max(new_weight) #get best prediction
         #print('The best estimate is given by x = ', self.particles[b_idx].pos[0]*self.map_resolution,' and y = ', self.particles[b_idx].pos[1]*self.map_resolution,' with weight = ', max_weight)
@@ -242,6 +291,9 @@ class Particle_filter(object):
         for i in range(self.x):
             for j in range(self.y):
                 self.map[i,j] = _data[j*self.x+i]
+                self.occupancy_file.write(repr(self.map[i,j])+ ' ')
+            self.occupancy_file.write('\n')
+
 
     def m_to_grid(self):
         self.ranges_in_grid = np.zeros((2,self.angle_readings)) #create new ranges vector
@@ -301,7 +353,6 @@ class Particle_filter(object):
 
     def odom_processing(self,msg):
         #Save robot Odometry
-
 
         # Determine the difference between new and old values
         self.last_robot_odom = self.robot_odom
@@ -369,6 +420,7 @@ class Particle_filter(object):
         #print('VAr x -',self.dpitch,'Var do roll',self.droll)
         #print('The particle',2,'is in (',self.particles[2].pos[0]*self.map_resolution,',',self.particles[2].pos[1]*self.map_resolution,')')
         self.odometry_correct(m) # check if particle is in map
+        self.particle_pos_file.write(repr(m)+ ' ' + repr(self.particles[m].pos) + ' ' + repr(self.particles[m].theta)+'\n')
         return [[self.particles[m].pos[0],self.particles[m].pos[1]],self.particles[m].theta]
 
     def scan_analysis(self, msg):
@@ -384,6 +436,8 @@ class Particle_filter(object):
     def get_map(self, msg):
         self.x = msg.info.width
         self.y = msg.info.height
+        self.origin_x = msg.info.origin.position.x
+        self.origin_y = msg.info.origin.position.y
         data = msg.data
         self.map_resolve_size(data)
         self.map_resolution = msg.info.resolution
@@ -410,23 +464,25 @@ class MCL(object):
                                  dynamics_orientation_noise_std_dev,
                                  beam_range_measurement_noise_std_dev)
 
+        self.pf.error_file_position = open("error_file_position.txt", "w")
+        self.pf.error_file_orientation = open("error_file_orientation.txt", "w")
+        self.pf.occupancy_file = open("occupancy_grid.txt", "w")
+        self.pf.particle_pos_file = open("particle_position.txt", "w")
+        self.pf.ground_truth_file = open("ground_truth_position.txt", "w")
+        self.pf.prediction_file = open("prediction_file.txt", "w")
+
         # Get MAP
 
         self.map_sub = rospy.Subscriber('/map', OccupancyGrid, self.map_callback)
         self.gt_sub = rospy.Subscriber('/ground_truth/state', Odometry, self.gt_callback) #/ground_truth/state
         self.pf.Particle_init()
-        self.pf.Initar_init()
+        #self.pf.Initar_init()
         self.gt_yaw = 0
         self.gt_x = 0
         self.gt_y = 0
 
-        #self.laser_points_marker_pub = rospy.Publisher('/typhoon/debug/laser_points', Marker, queue_size=1)
         self.particles_pub = rospy.Publisher('/typhoon/particle_filter/particles', MarkerArray, queue_size=1)
-        # self.gt_pub = rospy.Publisher('/typhoon/particle_filter/ground_truth', Marker, queue_size=1)
         # Subscribe to topics
-
-
-
 
         rospy.Subscriber('/mavros/local_position/odom', Odometry, self.odom_callback) #/ground_truth/state
         rospy.Subscriber('/spur/laser/scan', LaserScan, self.scan_callback)
@@ -439,7 +495,7 @@ class MCL(object):
 
     def gt_callback(self,msg):
         self.pf.get_ground_truth(msg)
-        self.gt_sub.unregister()
+        #self.gt_sub.unregister()
 
     def map_callback(self, msg):
         self.pf.get_map(msg)
@@ -447,85 +503,6 @@ class MCL(object):
 
     def odom_callback(self, msg):
         self.pf.odom_processing(msg)
-
-    # def gt_processing(self,msg):
-    #     #Save robot Odometry
-    #
-    #
-    #     # Determine the difference between new and old values
-    #     self.robot_odom = msg
-    #
-    #     p_map_currbaselink = np.array([self.robot_odom.pose.pose.position.x,
-    #                                     self.robot_odom.pose.pose.position.y,
-    #                                     self.robot_odom.pose.pose.position.z])
-    #
-    #     q_map_currbaselink = np.array([self.robot_odom.pose.pose.orientation.x,
-    #                                     self.robot_odom.pose.pose.orientation.y,
-    #                                     self.robot_odom.pose.pose.orientation.z,
-    #                                     self.robot_odom.pose.pose.orientation.w])
-    #
-    #     # Save quaternion units, with axis of rotation
-    #     # Does the rotation matrix
-    #     p_lastbaselink_currbaselink = p_map_currbaselink
-    #     # R_map_lastbaselink = tr.quaternion_matrix(q_map_lastbaselink)[0:3,0:3]
-    #     #
-    #     # p_lastbaselink_currbaselink = R_map_lastbaselink.transpose().dot(p_map_currbaselink - p_map_lastbaselink)
-    #
-    #     q_map_currbaselink_euler = euler_from_quaternion(q_map_currbaselink)
-    #     # q_lastbaselink_currbaselink = tr.quaternion_multiply(tr.quaternion_inverse(q_map_lastbaselink), q_map_currbaselink)
-    #     #
-    #     # roll_diff, pitch_diff, yaw_diff = tr.euler_from_quaternion(q_lastbaselink_currbaselink)
-    #
-    #     yaw_diff = q_map_currbaselink_euler[2]
-    #
-    #     self.gt_yaw = yaw_diff
-    #     self.gt_x = p_lastbaselink_currbaselink[0]
-    #     self.gt_y = p_lastbaselink_currbaselink[1]
-
-    # def get_2d_laser_points_marker(self, timestamp, frame_id, pts_in_map, marker_id, rgba):
-    #     msg = Marker()
-    #     msg.header.stamp = timestamp
-    #     msg.header.frame_id = frame_id
-    #     msg.ns = 'laser_points'
-    #     msg.id = marker_id
-    #     msg.type = 6
-    #     msg.action = 0
-    #     msg.points = [Point(pt[0], pt[1], pt[2]) for pt in pts_in_map]
-    #     msg.colors = [rgba for pt in pts_in_map]
-    #
-    #     for pt in pts_in_map:
-    #         assert((not np.isnan(pt).any()) and np.isfinite(pt).all())
-    #
-    #     msg.scale.x = 0.1
-    #     msg.scale.y = 0.1
-    #     msg.scale.z = 0.1
-    #     return msg
-    #
-    # def publish_laser_pts(self, msg):
-    #     """Publishes the currently received laser scan points from the robot, after we subsampled
-    #     them in order to comparse them with the expected laser scan from each particle."""
-    #     if self.pf.robot_odom is None:
-    #         return
-    #
-    #     subsampled_ranges, subsampled_angles = self.pf.subsample(msg)
-    #
-    #
-    #     N = len(subsampled_ranges)
-    #     x = self.pf.robot_odom.pose.pose.position.x
-    #     y = self.pf.robot_odom.pose.pose.position.y
-    #     _, _ , yaw_in_map = tr.euler_from_quaternion(np.array([self.pf.robot_odom.pose.pose.orientation.x,
-    #                                                            self.pf.robot_odom.pose.pose.orientation.y,
-    #                                                            self.pf.robot_odom.pose.pose.orientation.z,
-    #                                                            self.pf.robot_odom.pose.pose.orientation.w]))
-    #
-    #     pts_in_map = [ (x ,
-    #                     y ,
-    #                     self.pf.map_resolution) for r,theta in zip(subsampled_ranges, subsampled_angles)]
-    #
-    #
-    #     # lpmarker = self.get_2d_laser_points_marker(msg.header.stamp, 'map', pts_in_map, 30000, ColorRGBA(0, 0.0, 0, 1.0))
-    #     # self.laser_points_marker_pub.publish(lpmarker)
-
 
     def get_particle_marker(self, timestamp, particle, marker_id):
         """Returns an rviz marker that visualizes a single particle"""
@@ -542,13 +519,10 @@ class MCL(object):
         vx = mt.cos(yaw_in_map)
         vy = mt.sin(yaw_in_map)
         msg.color = ColorRGBA(0, 1.0, 0, 1.0)
-        # if marker_id == 5:
-        #     msg.color = ColorRGBA(1.0, 0.0, 0, 1.0)
-
         #print('This is Particle x-',particle.pos[0],'This is Particle y-',particle.pos[1])
 
-        gx = particle.pos[0] * self.pf.map_resolution - 10
-        gy = particle.pos[1] * self.pf.map_resolution - 10
+        gx = particle.pos[0] * self.pf.map_resolution + self.pf.origin_x
+        gy = particle.pos[1] * self.pf.map_resolution + self.pf.origin_y
         quat = Quaternion(*quaternion_from_euler(0,0,particle.theta))
         msg.points.append(Point(gx, gy,0))
         msg.points.append(Point(gx + self.pf.map_resolution*vx, gy + self.pf.map_resolution*vy, 0))
@@ -568,42 +542,6 @@ class MCL(object):
 
         self.particles_pub.publish(ma)
 
-    # def get_gt_marker(self, timestamp):
-    #     """Returns an rviz marker that visualizes a single particle"""
-    #     msg = Marker()
-    #     msg.header.stamp = timestamp
-    #     msg.header.frame_id = 'map'
-    #     msg.ns = 'ground_truth'
-    #     msg.id = 0
-    #     msg.type = 0  # arrow
-    #     msg.action = 0 # add/modify
-    #     msg.lifetime = rospy.Duration(1)
-    #
-    #     yaw_in_map = self.gt_yaw
-    #     vx = mt.cos(yaw_in_map)
-    #     vy = mt.sin(yaw_in_map)
-    #     msg.color = ColorRGBA(1.0, 0, 0, 1.0)
-    #
-    #     #print('This is Particle x-',particle.pos[0],'This is Particle y-',particle.pos[1])
-    #
-    #     gx = self.gt_x - 10
-    #     gy = self.gt_y - 10
-    #     quat = Quaternion(*quaternion_from_euler(0,0,self.gt_yaw))
-    #     msg.points.append(Point(gx, gy,0))
-    #     msg.points.append(Point(gx + self.pf.map_resolution*vx, gy + self.pf.map_resolution*vy, 0))
-    #     msg.pose.orientation = quat
-    #
-    #     msg.scale.x = 0.3
-    #     msg.scale.y = 0.5
-    #     msg.scale.z = 1
-    #     return msg
-    #
-    # def publish_ground_truth(self):
-    #     ts = rospy.Time.now()
-    #     gt = self.get_gt_marker(ts)
-    #
-    #     self.gt_pub.publish(gt)
-
     def run(self):
         rate = rospy.Rate(1)
         while not rospy.is_shutdown():
@@ -612,6 +550,12 @@ class MCL(object):
             self.pf.Resample_particles()
 
             rate.sleep()
+        self.pf.error_file_position.close()
+        self.pf.error_file_orientation.close()
+        self.pf.occupancy_file.close()
+        self.pf.particle_pos_file.close()
+        self.pf.ground_truth_file.close()
+        self.pf.prediction_file.close()
 
 
 if __name__ == '__main__':
