@@ -146,13 +146,17 @@ class Particle_filter(object):
         return _pbmat
 
     def Initar_init(self):
+        while self.map_resolution == 0: #while not started
+            rospy.sleep(1)
         for m in range(self.M):
-            self.particles[m].pos[0] = self.ground_truth_x
-            self.particles[m].pos[1] = self.ground_truth_y
-            self.particles[m].theta = self.ground_truth_yaw
+            self.particles[m].pos[0] = 150#self.ground_truth_x
+            self.particles[m].pos[1] = 120#self.ground_truth_y
+            self.particles[m].theta = 0#self.ground_truth_yaw
 
 
     def get_ground_truth(self, msg):
+        while self.map_resolution == 0: #while not started
+            rospy.sleep(1)
         p_map_currbaselink = np.array([msg.pose.pose.position.x,
                                        msg.pose.pose.position.y,
                                        msg.pose.pose.position.z])
@@ -219,6 +223,20 @@ class Particle_filter(object):
         error_ori = self.theta_p-self.ground_truth_yaw_now
         return error_pos, error_ori
 
+    def check_divergence(self, _new_weight):
+        max_w = max(_new_weight)
+        rate_w = max_w / self.total_readings
+        if rate_w < 0.70:
+            i = 0
+            d = {k:v for k, v in enumerate(_new_weight)}
+            sorted_d = sorted(d.items(), key=operator.itemgetter(1), reverse=False)
+            id = [k[0] for k in sorted_d][:10]
+            while i < 10:
+                #id = np.argmax(temp_weight)
+                self.Init_one_particle(id[i])
+                #temp_weight[id] = 0
+                i+=1
+
     def Resample_particles(self):
         while self.max_dist == 0: #while not started
             rospy.sleep(1)
@@ -247,6 +265,7 @@ class Particle_filter(object):
             #     ((self.ground_truth_y_now*self.map_resolution) - (self.particles[m].pos[1] * self.map_resolution))**2)
             #if m == 1:
             newPF.append(Particle(m, new_pos, new_weight[m], _theta = new_theta)) #create new PF
+        self.check_divergence(new_weight)
         new_weight = self.normalize_weights(new_weight)
         eff_particles = self.det_eff_part(new_weight)
         self.x_p, self.y_p, self.theta_p = self.Pos_predict( new_weight, eff_particles)
@@ -317,8 +336,8 @@ class Particle_filter(object):
         return subsample_range, subsample_angle
 
     def compare_dist(self, _m, _i):
-        ang_dist_x = mt.cos(self.angle_vector[_i]+self.particles[_m].theta)*self.ranges_in_grid[0,_i] #
-        ang_dist_y = mt.sin(self.angle_vector[_i]+self.particles[_m].theta)*self.ranges_in_grid[1,_i] #trigonometry
+        ang_dist_x = mt.cos(self.angle_vector[_i]+self.particles[_m].theta+mt.pi/2)*self.ranges_in_grid[0,_i] #
+        ang_dist_y = mt.sin(self.angle_vector[_i]+self.particles[_m].theta+mt.pi/2)*self.ranges_in_grid[1,_i] #trigonometry
         xx = int(mt.floor(ang_dist_x))
         yy = int(mt.floor(ang_dist_y))
         xi = int(self.particles[_m].pos[0])
@@ -476,7 +495,7 @@ class MCL(object):
         self.map_sub = rospy.Subscriber('/map', OccupancyGrid, self.map_callback)
         self.gt_sub = rospy.Subscriber('/ground_truth/state', Odometry, self.gt_callback) #/ground_truth/state
         self.pf.Particle_init()
-        #self.pf.Initar_init()
+        self.pf.Initar_init()
         self.gt_yaw = 0
         self.gt_x = 0
         self.gt_y = 0
@@ -560,7 +579,7 @@ class MCL(object):
 
 if __name__ == '__main__':
 
-    numero_particulas = 100
+    numero_particulas = 200
 
     Monte_carlo = MCL(numero_particulas)
 
