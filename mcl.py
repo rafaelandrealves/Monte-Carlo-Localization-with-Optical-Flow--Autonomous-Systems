@@ -5,8 +5,7 @@ import math as mt
 import rospy
 import operator
 from mavros_msgs.msg import OpticalFlowRad,Altitude
-from rosgraph_msgs.msg import Clock
-from sensor_msgs.msg import LaserScan,Imu
+from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid, MapMetaData, Odometry
 from geometry_msgs.msg import Twist, PoseStamped, Point, Pose, Quaternion, PoseArray
 from tf.transformations  import euler_from_quaternion, quaternion_from_euler
@@ -96,21 +95,6 @@ class Particle_filter(object):
         self.ground_truth_file = []
         self.prediction_file = []
         self.curr_odometry = None
-        self.imu_velocity = None 
-        self.new_velocity = None  
-        self.Vx_temp = 0
-        self.Vy_temp = 0  
-        self.vx = 0
-        self.vy = 0
-        self.time = 0
-        self.last_time = 0
-        self.dif_t = 0
-        self.dif_time = 0
-        self.last_velocity = None
-        self.curr_velocity = None
-        self.imu_velocity = None
-        self.velocity_x = 0
-        self.velocity_y = 0
 
 
     def Particle_init(self):
@@ -247,8 +231,6 @@ class Particle_filter(object):
         self.dyaw_temp = 0
         self.dy_temp = 0
         self.dx_temp = 0
-        self.velocity_x = 0
-        self.velocity_y = 0
         self.ground_truth_x_now = self.ground_truth_x
         self.ground_truth_y_now = self.ground_truth_y
         self.ground_truth_yaw_now = self.ground_truth_yaw
@@ -465,26 +447,8 @@ class Particle_filter(object):
     def get_alt(self,msg):
         self.alti = msg.bottom_clearance
 
-    def get_clock(self,msg):
-        if self.first_time == True:
-            self.time = msg.clock.secs + msg.clock.nsecs * 10**(-9)
-        else:
-            self.last_time = self.time
-            self.time = msg.clock.secs + msg.clock.nsecs * 10**(-9)
-            self.dif_t += self.time - self.last_time
-    def get_IMU(self,msg):
-        self.imu_velocity = msg
-
     def velocity_motion_model(self,msg):
-        #self.twist_msg = msg.twist.twist
-
-        dif_time = self.dif_t
-        self.dif_time = self.dif_t
-        self.dif_t = 0
-        
-        self.last_velocity = self.curr_velocity
-        #self.new_velocity = self.imu_velocity
-        self.curr_velocity = msg.twist.twist
+        self.curr_odometry = msg
         
         #print('TIME-',dif_time)
 
@@ -492,42 +456,39 @@ class Particle_filter(object):
         #self.last_y = self.curr_y
     
 
-        if  self.last_velocity:
 
-            #q_map_lastbaselink = np.array([self.last_velocity.orientation.x,
-            #                                self.last_velocity.orientation.y,
-            #                                self.last_velocity.orientation.z,
-            #                                self.last_velocity.orientation.w])
+        #q_map_lastbaselink = np.array([self.last_velocity.orientation.x,
+        #                                self.last_velocity.orientation.y,
+        #                                self.last_velocity.orientation.z,
+        #                                self.last_velocity.orientation.w])
 
 
-            #q_map_currbaselink = np.array([self.new_velocity.orientation.x,
-            #                                self.new_velocity.orientation.y,
-            #                                self.new_velocity.orientation.z,
-            #                                self.new_velocity.orientation.w]) 
+        #q_map_currbaselink = np.array([self.new_velocity.orientation.x,
+        #                                self.new_velocity.orientation.y,
+        #                                self.new_velocity.orientation.z,
+        #                                self.new_velocity.orientation.w]) 
 
-            #q_map_lastbaselink_euler = euler_from_quaternion(q_map_lastbaselink)
-            #q_map_currbaselink_euler = euler_from_quaternion(q_map_currbaselink)
-            #yaw_diff = q_map_currbaselink_euler[2] - q_map_lastbaselink_euler[2]
-            print('Rita-',self.imu_velocity.linear_acceleration.x*(dif_time ** 2))
-            yaw_diff = self.curr_velocity.angular.z * dif_time
-            #print('Valor-',yaw_diff)
-            #new_x = self.curr_x - (((self.curr_velocity.linear_acceleration.x )*dif_time)/(self.curr_velocity.angular_velocity.x ))* mt.sin(yaw_diff) + (((self.curr_velocity.linear_acceleration.x )*dif_time)/(self.curr_velocity.angular_velocity.x ))* mt.sin(yaw_diff + dif_time * (self.curr_velocity.angular_velocity.x )) 
-            #new_y = self.curr_y + (((self.curr_velocity.linear_acceleration.y )*dif_time)/(self.curr_velocity.angular_velocity.y ))* mt.cos(yaw_diff) - (((self.curr_velocity.linear_acceleration.y )*dif_time)/(self.curr_velocity.angular_velocity.y ))* mt.cos(yaw_diff + dif_time * (self.curr_velocity.angular_velocity.y )) 
-            #new_x = (self.curr_velocity.linear.x )*dif_time - self.imu_velocity.linear_acceleration.x*(dif_time ** 2)/2
-            #new_y = (self.curr_velocity.linear.y )*dif_time - self.imu_velocity.linear_acceleration.y*(dif_time ** 2)/2
-            #self.curr_x = new_x
-            #self.curr_y = new_y
-            self.velocity_x += -self.imu_velocity.linear_acceleration.x*(dif_time)
-            self.velocity_y += -self.imu_velocity.linear_acceleration.y*(dif_time)
-            self.dyaw_temp += yaw_diff
-            #self.dx_temp += new_x
-            #self.dy_temp += new_y
-            self.dx_temp += self.velocity_x*(dif_time)
-            self.dy_temp += self.velocity_y*(dif_time)
-            #print('Vx',self.Vy_temp, 'Time-',self.dif_time)
-            #self.dx_temp += self.curr_x - self.last_x 
-            #print('dx-',new_x,'dy-',new_y,'Velx-',self.curr_velocity.linear.x,'Vely-',self.curr_velocity.linear.y )
-            #self.dy_temp +=  self.curr_y - self.last_y 
+        #q_map_lastbaselink_euler = euler_from_quaternion(q_map_lastbaselink)
+        #q_map_currbaselink_euler = euler_from_quaternion(q_map_currbaselink)
+        #yaw_diff = q_map_currbaselink_euler[2] - q_map_lastbaselink_euler[2]
+        yaw_diff = self.curr_odometry.integrated_zgyro
+        #print('Valor-',yaw_diff)
+        #new_x = self.curr_x - (((self.curr_velocity.linear_acceleration.x )*dif_time)/(self.curr_velocity.angular_velocity.x ))* mt.sin(yaw_diff) + (((self.curr_velocity.linear_acceleration.x )*dif_time)/(self.curr_velocity.angular_velocity.x ))* mt.sin(yaw_diff + dif_time * (self.curr_velocity.angular_velocity.x )) 
+        #new_y = self.curr_y + (((self.curr_velocity.linear_acceleration.y )*dif_time)/(self.curr_velocity.angular_velocity.y ))* mt.cos(yaw_diff) - (((self.curr_velocity.linear_acceleration.y )*dif_time)/(self.curr_velocity.angular_velocity.y ))* mt.cos(yaw_diff + dif_time * (self.curr_velocity.angular_velocity.y )) 
+        #new_x = (self.curr_velocity.linear.x )*dif_time - self.imu_velocity.linear_acceleration.x*(dif_time ** 2)/2
+        #new_y = (self.curr_velocity.linear.y )*dif_time - self.imu_velocity.linear_acceleration.y*(dif_time ** 2)/2
+        #self.curr_x = new_x
+        #self.curr_y = new_y
+        #elocity_x = self.imu_velocity.linear_acceleration.x*(dif_time)
+        #velocity_y = self.imu_velocity.linear_acceleration.y*(dif_time)
+        self.dyaw_temp = yaw_diff
+        self.dx_temp += self.curr_odometry.integrated_y
+        self.dy_temp += self.curr_odometry.integrated_x
+
+        print('dx-',self.dx_temp, 'dy-',self.dy_temp)
+        #self.dx_temp += self.curr_x - self.last_x 
+        #print('dx-',new_x,'dy-',new_y,'Velx-',self.curr_velocity.linear.x,'Vely-',self.curr_velocity.linear.y )
+        #self.dy_temp +=  self.curr_y - self.last_y 
 
 
 class MCL(object):
@@ -562,7 +523,6 @@ class MCL(object):
         self.map_sub = rospy.Subscriber('/map', OccupancyGrid, self.map_callback)
         self.gt_sub = rospy.Subscriber('/ground_truth/state', Odometry, self.gt_callback) #/ground_truth/state
         self.pf.Particle_init()
-        rospy.Subscriber('/clock', Clock, self.clock_callback)
         self.pf.Initar_init()
         self.gt_yaw = 0
         self.gt_x = 0
@@ -572,9 +532,7 @@ class MCL(object):
         # Subscribe to topics
 
         rospy.Subscriber('/mavros/altitude', Altitude , self.get_altitude) #/ground_truth/state
-        rospy.Subscriber('/mavros/imu/data_raw', Imu, self.odom_callback) #/ground_truth/state
-        rospy.Subscriber('/mavros/local_position/odom', Odometry, self.twist_callback)
-        #rospy.Subscriber('/mavros/px4flow/raw/optical_flow_rad', OpticalFlowRad, self.odom_callback) #/ground_truth/state
+        rospy.Subscriber('/mavros/px4flow/raw/optical_flow_rad', OpticalFlowRad, self.odom_callback) #/ground_truth/state
         rospy.Subscriber('/spur/laser/scan', LaserScan, self.scan_callback)
 
 
@@ -582,9 +540,6 @@ class MCL(object):
     def scan_callback(self,msg):
         # self.publish_laser_pts(msg)
         self.pf.scan_analysis(msg)
-
-    def clock_callback(self,msg):
-        self.pf.get_clock(msg)
 
     def gt_callback(self,msg):
         self.pf.get_ground_truth(msg)
@@ -597,12 +552,10 @@ class MCL(object):
     def get_altitude(self, msg):
         self.pf.get_alt(msg)
 
-    def twist_callback(self,msg):
-        self.pf.velocity_motion_model(msg)
 
     def odom_callback(self, msg):
         #self.pf.odom_processing(msg)
-        self.pf.get_IMU(msg)
+        self.pf.velocity_motion_model(msg)
 
     def get_particle_marker(self, timestamp, particle, marker_id):
         """Returns an rviz marker that visualizes a single particle"""
