@@ -4,7 +4,9 @@ import numpy as np
 import math as mt
 import rospy
 import operator
-from sensor_msgs.msg import LaserScan
+from mavros_msgs.msg import OpticalFlowRad,Altitude
+from rosgraph_msgs.msg import Clock
+from sensor_msgs.msg import LaserScan,Imu
 from nav_msgs.msg import OccupancyGrid, MapMetaData, Odometry
 from geometry_msgs.msg import Twist, PoseStamped, Point, Pose, Quaternion, PoseArray
 from tf.transformations  import euler_from_quaternion, quaternion_from_euler
@@ -93,6 +95,26 @@ class Particle_filter(object):
         self.particle_pos_file = []
         self.ground_truth_file = []
         self.prediction_file = []
+        self.curr_odometry = None
+        self.imu_velocity = None 
+        self.new_velocity = None  
+        self.Vx_temp = 0
+        self.Vy_temp = 0  
+        self.vx = 0
+        self.vy = 0
+        self.time = 0
+        self.last_time = 0
+        self.dif_t = 0
+        self.dif_time = 0
+        self.last_velocity = None
+        self.curr_velocity = None
+        self.imu_velocity = None
+        self.velocity_x = 0
+        self.velocity_y = 0
+        self.opt_velocity = None
+        self.altitude = 0
+        self.last_orientation = None
+        self.curr_orientation = None
 
 
     def Particle_init(self):
@@ -146,17 +168,13 @@ class Particle_filter(object):
         return _pbmat
 
     def Initar_init(self):
-        while self.map_resolution == 0: #while not started
-            rospy.sleep(1)
         for m in range(self.M):
-            self.particles[m].pos[0] = 150#self.ground_truth_x
-            self.particles[m].pos[1] = 120#self.ground_truth_y
-            self.particles[m].theta = 0#self.ground_truth_yaw
+            self.particles[m].pos[0] = self.ground_truth_x
+            self.particles[m].pos[1] = self.ground_truth_y
+            self.particles[m].theta = self.ground_truth_yaw
 
 
     def get_ground_truth(self, msg):
-        while self.map_resolution == 0: #while not started
-            rospy.sleep(1)
         p_map_currbaselink = np.array([msg.pose.pose.position.x,
                                        msg.pose.pose.position.y,
                                        msg.pose.pose.position.z])
@@ -223,20 +241,6 @@ class Particle_filter(object):
         error_ori = self.theta_p-self.ground_truth_yaw_now
         return error_pos, error_ori
 
-    def check_divergence(self, _new_weight):
-        max_w = max(_new_weight)
-        rate_w = max_w / self.total_readings
-        if rate_w < 0.70:
-            i = 0
-            d = {k:v for k, v in enumerate(_new_weight)}
-            sorted_d = sorted(d.items(), key=operator.itemgetter(1), reverse=False)
-            id = [k[0] for k in sorted_d][:10]
-            while i < 10:
-                #id = np.argmax(temp_weight)
-                self.Init_one_particle(id[i])
-                #temp_weight[id] = 0
-                i+=1
-
     def Resample_particles(self):
         while self.max_dist == 0: #while not started
             rospy.sleep(1)
@@ -247,10 +251,11 @@ class Particle_filter(object):
         self.dyaw_temp = 0
         self.dy_temp = 0
         self.dx_temp = 0
+        self.velocity_x = 0
+        self.velocity_y = 0
         self.ground_truth_x_now = self.ground_truth_x
         self.ground_truth_y_now = self.ground_truth_y
         self.ground_truth_yaw_now = self.ground_truth_yaw
-        self.ground_truth_file.write(repr(self.ground_truth_x_now)+ ' ' +repr(self.ground_truth_y_now)+ ' ' +repr(self.ground_truth_yaw_now)+'\n')
         newPF = [] # X~
         finPF = [] # X
         new_weight = np.zeros(self.M) #new vector for weight change
@@ -265,18 +270,14 @@ class Particle_filter(object):
             #     ((self.ground_truth_y_now*self.map_resolution) - (self.particles[m].pos[1] * self.map_resolution))**2)
             #if m == 1:
             newPF.append(Particle(m, new_pos, new_weight[m], _theta = new_theta)) #create new PF
-        self.check_divergence(new_weight)
         new_weight = self.normalize_weights(new_weight)
         eff_particles = self.det_eff_part(new_weight)
         self.x_p, self.y_p, self.theta_p = self.Pos_predict( new_weight, eff_particles)
-        self.prediction_file.write(repr(self.x_p)+ ' ' +repr(self.y_p)+ ' ' +repr(self.theta_p)+'\n')
         #print('A particula 2 esta na posica x:',self.particles[2].pos[0],'e y:',self.particles[2].pos[1],'\n')
         #print(new_weight)
         #print('EFfective particle:',eff_particles)
         #print('Error', (mt.sqrt(error)/self.M ))
         error_position, error_orientation = self.error_calc()
-        self.error_file_position.write(repr(error_position)+'\n')
-        self.error_file_orientation.write(repr(error_orientation)+'\n')
         print('Error', error_position,error_orientation)
         b_idx = np.argmax(new_weight) #get best prediction index
         max_weight = max(new_weight) #get best prediction
@@ -310,8 +311,6 @@ class Particle_filter(object):
         for i in range(self.x):
             for j in range(self.y):
                 self.map[i,j] = _data[j*self.x+i]
-                self.occupancy_file.write(repr(self.map[i,j])+ ' ')
-            self.occupancy_file.write('\n')
 
 
     def m_to_grid(self):
@@ -336,8 +335,8 @@ class Particle_filter(object):
         return subsample_range, subsample_angle
 
     def compare_dist(self, _m, _i):
-        ang_dist_x = mt.cos(self.angle_vector[_i]+self.particles[_m].theta+mt.pi/2)*self.ranges_in_grid[0,_i] #
-        ang_dist_y = mt.sin(self.angle_vector[_i]+self.particles[_m].theta+mt.pi/2)*self.ranges_in_grid[1,_i] #trigonometry
+        ang_dist_x = mt.cos(self.angle_vector[_i]+self.particles[_m].theta)*self.ranges_in_grid[0,_i] #
+        ang_dist_y = mt.sin(self.angle_vector[_i]+self.particles[_m].theta)*self.ranges_in_grid[1,_i] #trigonometry
         xx = int(mt.floor(ang_dist_x))
         yy = int(mt.floor(ang_dist_y))
         xi = int(self.particles[_m].pos[0])
@@ -426,20 +425,20 @@ class Particle_filter(object):
         ntheta = random.gauss(0, self.dynamics_orientation_noise_std_dev) #create gauss
 
         # distance = mt.sqrt(self.dx**2 + self.dy**2)
+        #if (abs(self.dx) > 0.01): #check if was moving
+        self.particles[m].pos[0] += (self.dx * mt.cos(self.particles[m].theta) + self.dy * mt.sin(self.particles[m].theta))/self.map_resolution  # * (self.dx)/self.map_resolution
 
-        if (abs(self.dx) > 0.01): #check if was moving
-            self.particles[m].pos[0] += (self.dx + delta_x*self.dx)/self.map_resolution  # * (self.dx)/self.map_resolution
-
-        if (abs(self.dy) > 0.01):
-            self.particles[m].pos[1] += (self.dy + delta_y*self.dy)/self.map_resolution  # * (self.dy)/self.map_resolution
-
-        if abs(self.dyaw) > 0.01:
-            self.particles[m].theta += self.dyaw + ntheta #* self.dyaw
+        #if (abs(self.dy) > 0.01):
+        self.particles[m].pos[1] += (self.dy * mt.cos(self.particles[m].theta) + self.dx * mt.sin(self.particles[m].theta) )/self.map_resolution  # * (self.dy)/self.map_resolution
+        self.particles[m].theta += self.dyaw + ntheta * self.dyaw
+        print('Theta - ',self.particles[m].theta)
+        #if abs(self.dyaw) > 0.01:
+        
 
         #print('VAr x -',self.dpitch,'Var do roll',self.droll)
         #print('The particle',2,'is in (',self.particles[2].pos[0]*self.map_resolution,',',self.particles[2].pos[1]*self.map_resolution,')')
         self.odometry_correct(m) # check if particle is in map
-        self.particle_pos_file.write(repr(m)+ ' ' + repr(self.particles[m].pos) + ' ' + repr(self.particles[m].theta)+'\n')
+
         return [[self.particles[m].pos[0],self.particles[m].pos[1]],self.particles[m].theta]
 
     def scan_analysis(self, msg):
@@ -461,6 +460,92 @@ class Particle_filter(object):
         self.map_resolve_size(data)
         self.map_resolution = msg.info.resolution
 
+    def get_alt(self,msg):
+        self.alti = msg.bottom_clearance
+
+    def get_clock(self,msg):
+        if self.first_time == True:
+            self.time = msg.clock.secs + msg.clock.nsecs * 10**(-9)
+        else:
+            self.last_time = self.time
+            self.time = msg.clock.secs + msg.clock.nsecs * 10**(-9)
+            self.dif_t += self.time - self.last_time
+    def get_IMU(self,msg):
+        self.opt_velocity = msg
+    
+    def get_altitude(self,msg):
+        self.altitude = msg.ranges[0]
+
+    def velocity_motion_model(self,msg):
+        #self.twist_msg = msg.twist.twist
+
+        dif_time = self.dif_t
+        self.dif_time = self.dif_t
+        self.dif_t = 0
+        
+        self.last_velocity = self.curr_velocity
+        #self.new_velocity = self.imu_velocity
+        self.curr_velocity = msg.twist.twist
+        self.last_orientation = self.curr_orientation
+        self.curr_orientation = msg.pose.pose
+        
+        #print('TIME-',dif_time)
+
+        #self.last_x = self.curr_x
+        #self.last_y = self.curr_y
+    
+
+        if  self.last_velocity:
+
+            q_map_lastbaselink = np.array([self.curr_orientation.orientation.x,
+                                            self.curr_orientation.orientation.y,
+                                            self.curr_orientation.orientation.z,
+                                            self.curr_orientation.orientation.w])
+            q_map_lastbaselink1 = np.array([self.last_orientation.orientation.x,
+                                            self.last_orientation.orientation.y,
+                                            self.last_orientation.orientation.z,
+                                            self.last_orientation.orientation.w])                                            
+
+            q_map_lastbaselink_euler = euler_from_quaternion(q_map_lastbaselink)
+            q_map_lastbaselink_euler1 = euler_from_quaternion(q_map_lastbaselink1)
+            self.dyaw_temp += q_map_lastbaselink_euler[2] - q_map_lastbaselink_euler1[2]
+            #q_map_lastbaselink = np.array([self.last_velocity.orientation.x,
+            #                                self.last_velocity.orientation.y,
+            #                                self.last_velocity.orientation.z,
+            #                                self.last_velocity.orientation.w])
+
+
+            #q_map_currbaselink = np.array([self.new_velocity.orientation.x,
+            #                                self.new_velocity.orientation.y,
+            #                                self.new_velocity.orientation.z,
+            #                                self.new_velocity.orientation.w]) 
+
+            #q_map_lastbaselink_euler = euler_from_quaternion(q_map_lastbaselink)
+            #q_map_currbaselink_euler = euler_from_quaternion(q_map_currbaselink)
+            #yaw_diff = q_map_currbaselink_euler[2] - q_map_lastbaselink_euler[2]
+            #print('Rita-',self.imu_velocity.linear_acceleration.x*(dif_time ** 2))
+            #yaw_diff = self.curr_velocity.angular.z * dif_time
+            #print('Valor-',yaw_diff)
+            #new_x = self.curr_x - (((self.curr_velocity.linear_acceleration.x )*dif_time)/(self.curr_velocity.angular_velocity.x ))* mt.sin(yaw_diff) + (((self.curr_velocity.linear_acceleration.x )*dif_time)/(self.curr_velocity.angular_velocity.x ))* mt.sin(yaw_diff + dif_time * (self.curr_velocity.angular_velocity.x )) 
+            #new_y = self.curr_y + (((self.curr_velocity.linear_acceleration.y )*dif_time)/(self.curr_velocity.angular_velocity.y ))* mt.cos(yaw_diff) - (((self.curr_velocity.linear_acceleration.y )*dif_time)/(self.curr_velocity.angular_velocity.y ))* mt.cos(yaw_diff + dif_time * (self.curr_velocity.angular_velocity.y )) 
+            #new_x = (self.curr_velocity.linear.x )*dif_time - self.imu_velocity.linear_acceleration.x*(dif_time ** 2)/2
+            #new_y = (self.curr_velocity.linear.y )*dif_time - self.imu_velocity.linear_acceleration.y*(dif_time ** 2)/2
+            #self.curr_x = new_x
+            #self.curr_y = new_y
+            #self.velocity_x += -self.imu_velocity.linear_acceleration.x*(dif_time)
+            #self.velocity_y += -self.imu_velocity.linear_acceleration.y*(dif_time)
+            #self.dyaw_temp += yaw_diff
+            self.dx_temp += -self.opt_velocity.integrated_y * 2*self.altitude/3
+            self.dy_temp += self.opt_velocity.integrated_x  * 2*self.altitude/3
+            #self.dx_temp = -8*mt.sin(self.opt_velocity.integrated_y) 
+            #self.dy_temp = 8*mt.sin(self.opt_velocity.integrated_x) 
+            #print('dx-',self.dx_temp,'dy-',self.dy_temp)
+            #self.dx_temp += self.curr_velocity.linear.x*(dif_time)
+            #self.dy_temp += self.curr_velocity.linear.y*(dif_time)
+            #print('Vx',self.Vy_temp, 'Time-',self.dif_time)
+            #self.dx_temp += self.curr_x - self.last_x 
+            #print('dx-',new_x,'dy-',new_y,'Velx-',self.curr_velocity.linear.x,'Vely-',self.curr_velocity.linear.y )
+            #self.dy_temp +=  self.curr_y - self.last_y 
 
 
 class MCL(object):
@@ -472,7 +557,7 @@ class MCL(object):
 
         # Errors of associated devices
 
-        dynamics_translation_noise_std_dev   = 0.15
+        dynamics_translation_noise_std_dev   = 0.015
         dynamics_orientation_noise_std_dev   = 0.03
         beam_range_measurement_noise_std_dev = 0.3
 
@@ -483,18 +568,13 @@ class MCL(object):
                                  dynamics_orientation_noise_std_dev,
                                  beam_range_measurement_noise_std_dev)
 
-        self.pf.error_file_position = open("error_file_position.txt", "w")
-        self.pf.error_file_orientation = open("error_file_orientation.txt", "w")
-        self.pf.occupancy_file = open("occupancy_grid.txt", "w")
-        self.pf.particle_pos_file = open("particle_position.txt", "w")
-        self.pf.ground_truth_file = open("ground_truth_position.txt", "w")
-        self.pf.prediction_file = open("prediction_file.txt", "w")
 
         # Get MAP
 
         self.map_sub = rospy.Subscriber('/map', OccupancyGrid, self.map_callback)
         self.gt_sub = rospy.Subscriber('/ground_truth/state', Odometry, self.gt_callback) #/ground_truth/state
         self.pf.Particle_init()
+        rospy.Subscriber('/clock', Clock, self.clock_callback)
         self.pf.Initar_init()
         self.gt_yaw = 0
         self.gt_x = 0
@@ -503,7 +583,11 @@ class MCL(object):
         self.particles_pub = rospy.Publisher('/typhoon/particle_filter/particles', MarkerArray, queue_size=1)
         # Subscribe to topics
 
-        rospy.Subscriber('/mavros/local_position/odom', Odometry, self.odom_callback) #/ground_truth/state
+        rospy.Subscriber('/mavros/altitude', Altitude , self.get_altitude) #/ground_truth/state
+        #rospy.Subscriber('/mavros/imu/data', Imu, self.odom_callback) #/ground_truth/state
+        rospy.Subscriber('/mavros/px4flow/raw/optical_flow_rad', OpticalFlowRad, self.odom_callback) #/ground_truth/state
+        rospy.Subscriber('/spur/laser/scan2', LaserScan, self.scan_callback2)
+        rospy.Subscriber('/mavros/local_position/odom', Odometry, self.twist_callback)
         rospy.Subscriber('/spur/laser/scan', LaserScan, self.scan_callback)
 
 
@@ -511,6 +595,12 @@ class MCL(object):
     def scan_callback(self,msg):
         # self.publish_laser_pts(msg)
         self.pf.scan_analysis(msg)
+
+    def scan_callback2(self,msg):
+        self.pf.get_altitude(msg)
+
+    def clock_callback(self,msg):
+        self.pf.get_clock(msg)
 
     def gt_callback(self,msg):
         self.pf.get_ground_truth(msg)
@@ -520,8 +610,15 @@ class MCL(object):
         self.pf.get_map(msg)
         self.map_sub.unregister()
 
+    def get_altitude(self, msg):
+        self.pf.get_alt(msg)
+
+    def twist_callback(self,msg):
+        self.pf.velocity_motion_model(msg)
+
     def odom_callback(self, msg):
-        self.pf.odom_processing(msg)
+        #self.pf.odom_processing(msg)
+        self.pf.get_IMU(msg)
 
     def get_particle_marker(self, timestamp, particle, marker_id):
         """Returns an rviz marker that visualizes a single particle"""
@@ -579,7 +676,7 @@ class MCL(object):
 
 if __name__ == '__main__':
 
-    numero_particulas = 200
+    numero_particulas = 100
 
     Monte_carlo = MCL(numero_particulas)
 
