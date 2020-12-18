@@ -128,6 +128,7 @@ class Particle_filter(object):
         self.curr_altitude = 0
         self.dz = 0
         self.dz_temp = 0
+        self.ground_truth_z_now = 0
 
 
     def Particle_init(self):
@@ -300,6 +301,7 @@ class Particle_filter(object):
         self.pitch = 0
         self.ground_truth_x_now = self.ground_truth_x
         self.ground_truth_y_now = self.ground_truth_y
+        self.ground_truth_z_now = self.ground_truth_z
         self.ground_truth_yaw_now = self.ground_truth_yaw
         self.ground_truth_file.write(repr(self.ground_truth_x_now)+ ' ' +repr(self.ground_truth_y_now)+ ' ' +repr(self.ground_truth_yaw_now)+'\n')
         newPF = [] # X~
@@ -406,7 +408,7 @@ class Particle_filter(object):
             if self.ranges_in_grid[0,i] != -1: # check if is valid
                 wt = wt + self.compare_dist(_m,i) # change weight
         #wt = wt / self.total_readings
-        return wt
+        return (wt + abs(self.particles[_m].z - self.ground_truth_z_now))
 
     def odometry_correct(self, _m):
         xx = int(self.particles[_m].pos[0]) # pos x from particle
