@@ -129,6 +129,8 @@ class Particle_filter(object):
         self.dz = 0
         self.dz_temp = 0
         self.ground_truth_z_now = 0
+        self.forward_x = 0 
+        self.side_y = 0
 
 
     def Particle_init(self):
@@ -280,9 +282,9 @@ class Particle_filter(object):
             rospy.sleep(1)
         self.ranges = self.ranges_temp #assign to local variable
         self.dyaw = self.dyaw_temp
-        if self.dx_temp < 0:
+        if self.forward_x < 0:
             self.angx = mt.pi
-        if self.dy > 0:
+        if self.side_y > 0:
             self.ang = mt.pi/2
         else:
             self.ang = -mt.pi/2
@@ -296,9 +298,12 @@ class Particle_filter(object):
         self.dz_temp = 0
         self.velocity_x = 0
         self.velocity_y = 0
+
         #print('Pitch',self.pitch,'Roll-', self.roll)
         self.roll = 0
         self.pitch = 0
+        self.forward_x = 0 
+        self.side_y = 0
         self.ground_truth_x_now = self.ground_truth_x
         self.ground_truth_y_now = self.ground_truth_y
         self.ground_truth_z_now = self.ground_truth_z
@@ -408,7 +413,10 @@ class Particle_filter(object):
             if self.ranges_in_grid[0,i] != -1: # check if is valid
                 wt = wt + self.compare_dist(_m,i) # change weight
         #wt = wt / self.total_readings
-        return (wt + abs(self.particles[_m].z - self.ground_truth_z_now))
+        norm_error = abs(self.particles[_m].z - self.ground_truth_z_now)
+        prob_z = (1/(np.sqrt(2*np.pi*self.beam_range_measurement_noise_std_dev))) * np.exp(-0.5*(1/self.beam_range_measurement_noise_std_dev)*norm_error**2)
+        #print('DIF-',prob_z)
+        return (wt + prob_z)
 
     def odometry_correct(self, _m):
         xx = int(self.particles[_m].pos[0]) # pos x from particle
@@ -605,6 +613,8 @@ class Particle_filter(object):
 
 
             #self.roll +=  self.opt_velocity.integrated_xgyro
+            self.forward_x += self.opt_velocity.integrated_y 
+            self.side_y += self.opt_velocity.integrated_x
             self.pitch =  q_map_lastbaselink_euler1[1]
             #if self.droll < 0.1:
             self.dx_temp += self.curr_velocity.linear.x *dif_time 
