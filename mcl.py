@@ -289,9 +289,9 @@ class Particle_filter(object):
             rospy.sleep(1)
         self.ranges = self.ranges_temp #assign to local variable
         self.dyaw = self.dyaw_temp
-        if self.dx_temp < 0:
+        if self.forward_x < 0:
             self.angx = mt.pi
-        if self.dy > 0:
+        if self.side_y > 0:
             self.ang = mt.pi/2
         else:
             self.ang = -mt.pi/2
