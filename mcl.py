@@ -637,7 +637,7 @@ class MCL(object):
 
         dynamics_translation_noise_std_dev   = 0.05
         dynamics_orientation_noise_std_dev   = 0.03
-        beam_range_measurement_noise_std_dev = 0.3
+        beam_range_measurement_noise_std_dev = 0.4
 
         # Get the Particle Filter running
 
