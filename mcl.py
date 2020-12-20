@@ -23,10 +23,11 @@ def id_array(_size):
     return new_array
 
 class Particle(object):
-    def __init__(self, _id, _pos, _weight, _z, _theta=0):
+    def __init__(self, _id, _pos, _weight, _weight_z, _z, _theta=0):
         self.id = _id
         self.pos = _pos
         self.w = _weight
+        self.w_z = _weight_z
         self.theta = _theta
         self.z = _z
 
@@ -131,6 +132,7 @@ class Particle_filter(object):
         self.ground_truth_z_now = 0
         self.forward_x = 0
         self.side_y = 0
+        self.z_p = 0
 
 
     def Particle_init(self):
@@ -149,12 +151,14 @@ class Particle_filter(object):
                 idxf = int(mt.floor(idx))
                 idy = mx-idxf*self.y
             theta_t = np.random.random()*np.pi
+            while self.map_resolution == 0: #while not started
+                rospy.sleep(1)
             z = np.random.random()*(2/self.map_resolution)
             # if(m==5):
             #     self.particles.append(Particle(m,[422,384],1))
             #     print('map=',self.map[422,384])
             # else:
-            self.particles.append(Particle(m,[idxf,idy],1,z)) # append particle to particle filter #Z just for tracking
+            self.particles.append(Particle(m,[idxf,idy],1,1,z)) # append particle to particle filter #Z just for tracking
             #print('map=',self.map[idxf,idy])
 
     def Init_one_particle(self, _m):
@@ -172,6 +176,7 @@ class Particle_filter(object):
         self.particles[_m].pos[0] = idxf
         self.particles[_m].pos[1] = idy
         self.particles[_m].w = 1/self.M
+        self.particles[_m].w_z = 1/self.M
         #self.particles[_m].theta = np.random.random()*np.pi#uncomment for kidnap
 
     def particle_update_weight(self, _pbmat, _newPF):
@@ -261,6 +266,31 @@ class Particle_filter(object):
         # theta_pred = theta_pred / Nm
         return x_pred, y_pred, theta_pred
 
+    def Pos_predict_z(self, _w_v, _ef_part):
+        i = 0
+        temp_weight = _w_v
+        x_pred = 0
+        z_pred = 0
+        theta_pred = 0
+        for i in range(self.M):
+            z_pred += self.particles[i].z*_w_v[i]
+
+        # Nm = int(0.1 * self.M)
+        # d = {k:v for k, v in enumerate(temp_weight)}
+        # sorted_d = sorted(d.items(), key=operator.itemgetter(1), reverse=True)
+        # id = [k[0] for k in sorted_d][:Nm]
+        # while i < Nm:
+        #     #id = np.argmax(temp_weight)
+        #     x_pred += self.particles[id[i]].pos[0]
+        #     y_pred += self.particles[id[i]].pos[1]
+        #     theta_pred += self.particles[id[i]].theta
+        #     #temp_weight[id] = 0
+        #     i+=1
+        # x_pred = x_pred / Nm
+        # y_pred = y_pred / Nm
+        # theta_pred = theta_pred / Nm
+        return z_pred
+
     def error_calc(self):
         #print('prediction',self.x_p,' ', self.y_p, ' ', self.theta_p)
         #print('\nreality',self.ground_truth_x_now,' ', self.ground_truth_y_now, ' ', self.ground_truth_yaw_now)
@@ -268,7 +298,13 @@ class Particle_filter(object):
                         ((self.y_p-self.ground_truth_y_now)*self.map_resolution)**2)
         error_ori = self.theta_p-self.ground_truth_yaw_now
         return error_pos, error_ori
-
+    
+    def error_calc_z(self):
+        #print('prediction',self.x_p,' ', self.y_p, ' ', self.theta_p)
+        #print('\nreality',self.ground_truth_x_now,' ', self.ground_truth_y_now, ' ', self.ground_truth_yaw_now)
+        error_pos_z = self.z_p-self.ground_truth_z_now
+        return error_pos_z
+    
     def check_divergence(self, _new_weight):
         max_w = max(_new_weight)
         rate_w = max_w / self.total_readings
@@ -318,36 +354,45 @@ class Particle_filter(object):
         newPF = [] # X~
         finPF = [] # X
         new_weight = np.zeros(self.M) #new vector for weight change
+        new_weight_z = np.zeros(self.M)
         #rospy.sleep(10)
         error = 0
         self.m_to_grid() # convert from meters to grid coordinates
         for m in range(self.M):
             [new_pos,new_theta] = self.predict_next_odometry(m) #predict odom
             new_weight[m] = self.weight_change(m) # predict weight
+            new_weight_z[m] = self.z_weight(m)
             self.particles[m].w = new_weight[m] # assign to particle
-            newPF.append(Particle(m, new_pos, new_weight[m], self.particles[m].z, _theta = new_theta)) #create new PF
+            newPF.append(Particle(m, new_pos, new_weight[m],new_weight_z[m], self.particles[m].z, _theta = new_theta)) #create new PF
         self.check_divergence(new_weight) #comment in order to do tracking
         new_weight = self.normalize_weights(new_weight)
+        new_weight_z = self.normalize_weights(new_weight_z)
         eff_particles = self.det_eff_part(new_weight)
+        eff_particles_z = self.det_eff_part(new_weight_z)
         self.x_p, self.y_p, self.theta_p = self.Pos_predict( new_weight, eff_particles)
+        self.z_p = self.Pos_predict_z(new_weight_z, eff_particles_z)
         self.prediction_file.write(repr(self.x_p)+ ' ' +repr(self.y_p)+ ' ' +repr(self.theta_p)+'\n')
         #print('A particula 2 esta na posica x:',self.particles[2].pos[0],'e y:',self.particles[2].pos[1],'\n')
         #print(new_weight)
         #print('EFfective particle:',eff_particles)
         #print('Error', (mt.sqrt(error)/self.M ))
         error_position, error_orientation = self.error_calc()
+        error_z = self.error_calc_z()
         self.error_file_position.write(repr(error_position)+'\n')
         self.error_file_orientation.write(repr(error_orientation)+'\n')
-        print('Error', error_position,error_orientation)
+        print('Error', error_z)
         b_idx = np.argmax(new_weight) #get best prediction index
         max_weight = max(new_weight) #get best prediction
         #print('The best estimate is given by x = ', self.particles[b_idx].pos[0]*self.map_resolution,' and y = ', self.particles[b_idx].pos[1]*self.map_resolution,' with weight = ', max_weight)
         if eff_particles < 2*(self.M)/3:
             w_v = np.array(new_weight)
             w_v = w_v*self.M
+            w_v_z = np.array(new_weight_z)
+            w_v_z = w_v_z*self.M
             for m in range(self.M):
                 nposx = random.gauss(0, self.beam_range_measurement_noise_std_dev) #create gauss
                 nposy = random.gauss(0, self.beam_range_measurement_noise_std_dev) #create gauss
+                nposz = random.gauss(0, self.beam_range_measurement_noise_std_dev) #create gauss
                 if(max(w_v)<1):
                     mx = np.argmax(w_v)
                     w_v[mx] = 0
@@ -356,7 +401,15 @@ class Particle_filter(object):
                     w_v[mx] = w_v[mx] - 1
                 idx = self.particles[mx].pos[0]
                 idy = self.particles[mx].pos[1]
-                finPF.append(Particle(m,[idx+nposx,idy+nposy],1, self.particles[m].z, _theta = self.particles[m].theta))
+                
+                if(max(w_v_z)<1):
+                    mx_z = np.argmax(w_v_z)
+                    w_v_z[mx_z] = 0
+                else:
+                    mx_z = np.argmax(w_v_z) #max probability from matrix
+                    w_v_z[mx_z] = w_v_z[mx_z] - 1
+                idz = self.particles[mx_z].z
+                finPF.append(Particle(m,[idx+nposx,idy+ nposy],1,1, idz + nposz, _theta = self.particles[m].theta))
             self.particles = finPF
 
     def angle_vect_make(self, _max_angle, _min_angle, _angle_inc):
@@ -413,15 +466,20 @@ class Particle_filter(object):
         else:
             return 0
 
+    def z_weight(self,_m):
+        norm_error = abs(self.particles[_m].z - self.altitude)
+        prob_z = (1/(np.sqrt(2*np.pi*1.2))) * np.exp(-0.5*(1/1.2)*norm_error**2)
+        
+        return prob_z 
+
     def weight_change(self, _m):
         wt = 1 # temporary weight
         for i in range(self.angle_readings): # for all laser readings
             if self.ranges_in_grid[0,i] != -1: # check if is valid
                 wt = wt + self.compare_dist(_m,i) # change weight
         #wt = wt / self.total_readings
-        norm_error = abs(self.particles[_m].z - self.altitude)
-        prob_z = (1/(np.sqrt(2*np.pi*self.beam_range_measurement_noise_std_dev))) * np.exp(-0.5*(1/self.beam_range_measurement_noise_std_dev)*norm_error**2)
-        return (wt+prob_z)
+
+        return wt
 
     def odometry_correct(self, _m):
         xx = int(self.particles[_m].pos[0]) # pos x from particle
@@ -503,7 +561,7 @@ class Particle_filter(object):
         self.particles[m].pos[1] += (var2*flag + var2*delta_y)/self.map_resolution
         self.particles[m].pos[0] += (var*flag + var*delta_x)/self.map_resolution
         self.particles[m].theta += self.dyaw + ntheta * self.dyaw
-        self.particles[m].z += self.dz + delta_z*self.dz
+        self.particles[m].z += (self.dz + delta_z*self.dz)/self.map_resolution
 
 
         #if abs(self.dyaw) > 0.01:
@@ -637,7 +695,7 @@ class MCL(object):
 
         dynamics_translation_noise_std_dev   = 0.05
         dynamics_orientation_noise_std_dev   = 0.03
-        beam_range_measurement_noise_std_dev = 0.4
+        beam_range_measurement_noise_std_dev = 0.3
 
         # Get the Particle Filter running
 
