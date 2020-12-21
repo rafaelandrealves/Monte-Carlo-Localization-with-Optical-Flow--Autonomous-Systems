@@ -274,7 +274,7 @@ class Particle_filter(object):
         return error_pos, error_ori
 
     def error_calc_z(self):
-        error_pos_z = (self.z_p-self.ground_truth_z_now)
+        error_pos_z = mt.sqrt((self.z_p-self.ground_truth_z_now)**2)
         return error_pos_z
 
     def check_divergence(self, _new_weight):
