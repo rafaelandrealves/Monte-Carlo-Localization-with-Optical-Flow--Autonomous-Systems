@@ -155,7 +155,7 @@ class Particle_filter(object):
             theta_t = np.random.uniform()*2*mt.pi-mt.pi
             while self.map_resolution == 0: #while not started
                 rospy.sleep(1)
-            z = np.random.random()*(2/self.map_resolution)
+            z = np.random.random()*(2)
             # if(m==5):
             #     self.particles.append(Particle(m,[422,384],1))
             #     print('map=',self.map[422,384])
@@ -180,7 +180,7 @@ class Particle_filter(object):
         self.particles[_m].w = 1/self.M
         self.particles[_m].w_z = 1/self.M
         self.particles[_m].theta = np.random.uniform()*2*mt.pi-mt.pi#uncomment for kidnap
-        self.particles[_m].z = np.random.random()*(2/self.map_resolution)
+        self.particles[_m].z = np.random.random()*(2)
 
     # def particle_update_weight(self, _pbmat, _newPF):
     #     newmat = np.zeros((_pbmat.shape[0],_pbmat.shape[1]))
@@ -216,7 +216,7 @@ class Particle_filter(object):
 
         self.ground_truth_x = (p_map_currbaselink[0] - self.origin_x)/self.map_resolution
         self.ground_truth_y = (p_map_currbaselink[1] - self.origin_y)/self.map_resolution
-        self.ground_truth_z = (p_map_currbaselink[2])/self.map_resolution
+        self.ground_truth_z = (p_map_currbaselink[2])
         q_map_currbaselink_euler = euler_from_quaternion(q_map_currbaselink)
         self.ground_truth_yaw = q_map_currbaselink_euler[2]
 
@@ -274,7 +274,7 @@ class Particle_filter(object):
         return error_pos, error_ori
 
     def error_calc_z(self):
-        error_pos_z = (self.z_p-self.ground_truth_z_now)*self.map_resolution
+        error_pos_z = (self.z_p-self.ground_truth_z_now)
         return error_pos_z
 
     def check_divergence(self, _new_weight):
@@ -297,7 +297,7 @@ class Particle_filter(object):
             rospy.sleep(1)
         self.ranges = self.ranges_temp #assign to local variable
         self.dyaw = self.dyaw_temp
-        if self.forward_x > 0:
+        if self.forward_x < 0:
             self.angx = mt.pi
         else:
             self.angx = 0
@@ -309,6 +309,7 @@ class Particle_filter(object):
         self.dx = abs(self.dx_temp)
         self.dz = abs(self.dz_temp)
         self.dyaw_temp = 0
+        self.angx = 0
         self.dy_temp = 0
         self.dx_temp = 0
         self.dz_temp = 0
@@ -449,7 +450,7 @@ class Particle_filter(object):
 
     def z_weight(self,_m):
         norm_error = abs(self.particles[_m].z - self.altitude)
-        prob_z = np.exp(-0.5 * (1/0.5) * norm_error**2)
+        prob_z = np.exp(-0.5 * (1/1.2) * norm_error**2)
 
         return prob_z
 
@@ -547,7 +548,7 @@ class Particle_filter(object):
         self.particles[m].pos[1] += (var2*flag + var2*delta_y)/self.map_resolution
         self.particles[m].pos[0] += (var*flag + var*delta_x)/self.map_resolution
         self.particles[m].theta += self.dyaw + ntheta * self.dyaw
-        self.particles[m].z += (self.dz + delta_z*self.dz)/self.map_resolution
+        self.particles[m].z += (self.dz + delta_z*self.dz)
 
         #if abs(self.dyaw) > 0.01:
 
@@ -681,7 +682,7 @@ class MCL(object):
 
         dynamics_translation_noise_std_dev   = 0.05
         dynamics_orientation_noise_std_dev   = 0.03
-        beam_range_measurement_noise_std_dev = 0.3
+        beam_range_measurement_noise_std_dev = 0.15
 
         # Get the Particle Filter running
 
@@ -768,7 +769,7 @@ class MCL(object):
 
         gx = particle.pos[0] * self.pf.map_resolution + self.pf.origin_x
         gy = particle.pos[1] * self.pf.map_resolution + self.pf.origin_y
-        gz = particle.z * self.pf.map_resolution
+        gz = particle.z
         quat = Quaternion(*quaternion_from_euler(0,0,particle.theta))
         msg.points.append(Point(gx, gy,gz))
         msg.points.append(Point(gx + self.pf.map_resolution*vx, gy + self.pf.map_resolution*vy, gz))
